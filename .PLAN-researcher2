@@ -1,0 +1,263 @@
+# Plan: Integrate mem0 Memory Layer + Multi-Engine Research Configuration
+
+## Overview
+Extend PenguinCode's research capabilities with:
+1. **mem0** open-source memory layer for persistent AI memory
+2. **Configurable search engines** via YAML: DuckDuckGo, Fireplexity, SciraAI, SearXNG, Google
+3. **MCP server support** for DuckDuckGo, SearXNG, and Google where available
+
+## Target Files
+
+| File | Action |
+|------|--------|
+| `penguincode/config.yaml` | Add `research` and `memory` config sections |
+| `penguincode/penguincode/config/settings.py` | Add dataclasses for new config |
+| `penguincode/penguincode/tools/web.py` | Refactor to support multiple search engines |
+| `penguincode/penguincode/tools/memory.py` | **NEW** - mem0 integration |
+| `penguincode/penguincode/tools/engines/` | **NEW** - Search engine implementations |
+| `penguincode/pyproject.toml` | Add new dependencies |
+
+---
+
+## Phase 1: Config Schema Update
+
+### 1.1 Update `config.yaml`
+
+```yaml
+# Research configuration
+research:
+  engine: "duckduckgo"  # duckduckgo | fireplexity | sciraai | searxng | google
+  use_mcp: false        # Use MCP server when available
+  max_results: 5
+
+  # Engine-specific settings
+  engines:
+    duckduckgo:
+      safesearch: "moderate"
+      region: "wt-wt"
+
+    fireplexity:
+      firecrawl_api_key: "${FIRECRAWL_API_KEY}"
+      # Uses Ollama models configured above
+
+    sciraai:
+      api_key: "${SCIRA_API_KEY}"
+      endpoint: "https://api.scira.ai"
+
+    searxng:
+      url: "https://searx.be"  # Public instance or self-hosted
+      categories: ["general"]
+
+    google:
+      api_key: "${GOOGLE_API_KEY}"
+      cx_id: "${GOOGLE_CX_ID}"
+
+# Memory configuration (mem0)
+memory:
+  enabled: true
+  vector_store: "chroma"  # chroma | qdrant | pgvector
+
+  # Uses Ollama models from 'models' section for LLM/embeddings
+  embedding_model: "nomic-embed-text"
+
+  stores:
+    chroma:
+      path: "./.penguincode/memory"
+      collection: "penguincode_memory"
+
+    qdrant:
+      url: "http://localhost:6333"
+      collection: "penguincode_memory"
+
+    pgvector:
+      connection_string: "${PGVECTOR_URL}"
+      table: "penguincode_memory"
+```
+
+### 1.2 Update `settings.py`
+
+Add new dataclasses:
+- `ResearchConfig` - engine selection, MCP flag, engine-specific settings
+- `MemoryConfig` - mem0 settings, vector store selection
+- Update `Settings` to include these new configs
+- Add `get_research_engine()` and `get_memory_config()` helper functions
+
+---
+
+## Phase 2: Search Engine Abstraction
+
+### 2.1 Create Engine Interface
+
+**New file: `penguincode/tools/engines/base.py`**
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+@dataclass
+class SearchResult:
+    title: str
+    url: str
+    snippet: str
+    source: str  # Engine name
+
+class BaseSearchEngine(ABC):
+    @abstractmethod
+    async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        pass
+```
+
+### 2.2 Implement Engines
+
+| Engine | File | Integration Method |
+|--------|------|-------------------|
+| DuckDuckGo | `engines/duckduckgo.py` | `duckduckgo-search` package (existing) |
+| DuckDuckGo MCP | `engines/duckduckgo_mcp.py` | `@nickclyde/duckduckgo-mcp-server` |
+| Fireplexity | `engines/fireplexity.py` | HTTP to self-hosted instance |
+| SciraAI | `engines/sciraai.py` | HTTP to `api.scira.ai` |
+| SearXNG | `engines/searxng.py` | HTTP to configured instance |
+| SearXNG MCP | `engines/searxng_mcp.py` | `mcp-searxng` package |
+| Google | `engines/google.py` | Google Custom Search API |
+
+### 2.3 Engine Factory
+
+**New file: `penguincode/tools/engines/factory.py`**
+```python
+def get_search_engine(config: ResearchConfig) -> BaseSearchEngine:
+    """Factory to instantiate configured search engine."""
+    engines = {
+        "duckduckgo": DuckDuckGoEngine,
+        "fireplexity": FireplexityEngine,
+        "sciraai": SciraAIEngine,
+        "searxng": SearXNGEngine,
+        "google": GoogleEngine,
+    }
+    # Check MCP preference and availability
+    if config.use_mcp and config.engine in MCP_SUPPORTED:
+        return get_mcp_engine(config.engine, config)
+    return engines[config.engine](config)
+```
+
+### 2.4 Refactor `web.py`
+
+- Rename `WebSearchTool` to use engine factory
+- Keep `WebFetchTool` unchanged (content fetching)
+- Load engine from config at initialization
+
+---
+
+## Phase 3: mem0 Integration
+
+### 3.1 Add Dependencies
+
+**Update `pyproject.toml`:**
+```toml
+dependencies = [
+    # ... existing
+    "mem0ai[qdrant]>=0.1.0",
+    "chromadb>=0.4.0",
+    "pgvector>=0.2.0",  # Optional for PGVector
+]
+```
+
+### 3.2 Create Memory Tool
+
+**New file: `penguincode/tools/memory.py`**
+
+```python
+from mem0 import Memory
+
+class MemoryManager:
+    """Manages persistent memory using mem0 open-source."""
+
+    def __init__(self, config: MemoryConfig, ollama_url: str):
+        self.memory = Memory.from_config({
+            "llm": {
+                "provider": "ollama",
+                "config": {
+                    "model": config.llm_model,
+                    "ollama_base_url": ollama_url,
+                }
+            },
+            "embedder": {
+                "provider": "ollama",
+                "config": {
+                    "model": config.embedding_model,
+                    "ollama_base_url": ollama_url,
+                }
+            },
+            "vector_store": self._get_vector_store_config(config),
+        })
+
+    async def add_memory(self, content: str, user_id: str, metadata: dict = None):
+        """Store a memory from conversation/interaction."""
+
+    async def search_memories(self, query: str, user_id: str, limit: int = 5):
+        """Search relevant memories for context."""
+
+    async def get_all_memories(self, user_id: str):
+        """Retrieve all memories for a user/session."""
+```
+
+### 3.3 Integrate with Agents
+
+- Add `MemoryTool` to agent tool registry
+- Researcher agent uses memory for context
+- All agents can store insights to memory
+
+---
+
+## Phase 4: MCP Server Integration
+
+### 4.1 MCP Client Wrapper
+
+**New file: `penguincode/tools/mcp/client.py`**
+
+Wrapper to communicate with MCP servers:
+- DuckDuckGo: `@nickclyde/duckduckgo-mcp-server`
+- SearXNG: `mcp-searxng` or `SecretiveShell/MCP-searxng`
+
+### 4.2 MCP Configuration
+
+```yaml
+mcp:
+  enabled: true
+  servers:
+    duckduckgo:
+      command: "npx"
+      args: ["-y", "@nickclyde/duckduckgo-mcp-server"]
+    searxng:
+      command: "uvx"
+      args: ["mcp-searxng"]
+      env:
+        SEARXNG_URL: "https://searx.be"
+```
+
+---
+
+## Implementation Order
+
+1. **Config schema** - Update `config.yaml` and `settings.py`
+2. **Engine abstraction** - Create base class and factory
+3. **DuckDuckGo refactor** - Migrate existing to new pattern
+4. **Add engines** - SciraAI, SearXNG, Fireplexity, Google
+5. **mem0 integration** - Memory manager and tool
+6. **MCP support** - Optional MCP server integration
+7. **Testing** - Unit tests for each engine and memory
+
+## Dependencies to Add
+
+```toml
+# pyproject.toml additions
+"mem0ai>=0.1.0",
+"chromadb>=0.4.0",
+"psycopg2-binary>=2.9.0",  # For PGVector
+"qdrant-client>=1.7.0",    # For Qdrant option
+```
+
+## Notes
+
+- All search engines respect existing rate limiter
+- mem0 uses Ollama models (no external LLM API needed)
+- MCP is optional - direct integration is fallback
+- Fireplexity requires self-hosting (uses Firecrawl + Ollama)
+- SciraAI is free tier API (rate limited)

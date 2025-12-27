@@ -56,10 +56,54 @@ history:
   location: "per-project"
   max_sessions: 50
 
-web_search:
-  provider: "duckduckgo"
+# Research configuration
+research:
+  engine: "duckduckgo"  # duckduckgo | fireplexity | sciraai | searxng | google
+  use_mcp: true         # Use MCP server when available (default for duckduckgo/google)
   max_results: 5
-  safesearch: "moderate"
+
+  # Engine-specific settings
+  engines:
+    duckduckgo:
+      safesearch: "moderate"
+      region: "wt-wt"
+
+    fireplexity:
+      firecrawl_api_key: "${FIRECRAWL_API_KEY}"
+      # Uses Ollama models configured above
+
+    sciraai:
+      api_key: "${SCIRA_API_KEY}"
+      endpoint: "https://api.scira.ai"
+
+    searxng:
+      url: "https://searx.be"  # Public instance or self-hosted
+      categories: ["general"]
+
+    google:
+      api_key: "${GOOGLE_API_KEY}"
+      cx_id: "${GOOGLE_CX_ID}"
+
+# Memory configuration (mem0)
+memory:
+  enabled: true
+  vector_store: "chroma"  # chroma | qdrant | pgvector
+
+  # Uses Ollama models from 'models' section for LLM/embeddings
+  embedding_model: "nomic-embed-text"
+
+  stores:
+    chroma:
+      path: "./.penguincode/memory"
+      collection: "penguincode_memory"
+
+    qdrant:
+      url: "http://localhost:6333"
+      collection: "penguincode_memory"
+
+    pgvector:
+      connection_string: "${PGVECTOR_URL}"
+      table: "penguincode_memory"
 
 # GPU Regulators (rate limiting to prevent overload)
 regulators:

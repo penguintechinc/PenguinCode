@@ -51,6 +51,26 @@ main() {
     print_success "Python $PYTHON_VERSION detected"
     printf "\n"
 
+    # Get project root directory
+    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+    PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+    # Setup virtual environment
+    print_status "Setting up virtual environment..."
+    VENV_DIR="$PROJECT_ROOT/venv"
+
+    if [[ ! -d "$VENV_DIR" ]]; then
+        python3 -m venv "$VENV_DIR"
+        print_success "Virtual environment created at $VENV_DIR"
+    else
+        print_success "Virtual environment already exists at $VENV_DIR"
+    fi
+
+    # Activate virtual environment
+    source "$VENV_DIR/bin/activate"
+    print_success "Virtual environment activated"
+    printf "\n"
+
     # Check for pip or pipx
     print_status "Checking for pip/pipx..."
     HAS_PIP=false
@@ -70,10 +90,6 @@ main() {
         exit 1
     fi
     printf "\n"
-
-    # Get project root directory
-    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-    PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
     # Check if penguincode is already installed
     print_status "Checking if penguincode is installed..."

@@ -6,12 +6,14 @@ This is the primary agent that users interact with. It serves two roles:
 2. **Foreman** - Delegates work to specialized agents, reviews their output,
    and can dispatch follow-up agents to fix issues if needed
 
-Unlike Claude Code where the chat agent may do work itself,
-PenguinCode's chat agent NEVER uses tools directly - it only delegates.
+For complex tasks, it uses the PlannerAgent to break down work and can
+execute multiple agents in parallel (up to max_concurrent_agents).
 """
 
+import asyncio
 import json
-from typing import Dict, List, Optional
+import time
+from typing import Dict, List, Optional, Tuple
 
 from penguincode.ollama import Message, OllamaClient
 from penguincode.config.settings import Settings
@@ -26,23 +28,33 @@ You have two roles:
 For general questions, greetings, or explaining concepts - respond directly without spawning agents.
 
 ## Role 2: Foreman (Job Supervisor)
-For any code or file operations, you delegate to specialized agents and supervise their work:
+For any code or file operations, you delegate to specialized agents and supervise their work.
 
-**spawn_explorer** - For reading, searching, or understanding code
-**spawn_executor** - For creating, editing, or running code
+**Available agents:**
+- **spawn_explorer** - For reading, searching, or understanding code
+- **spawn_executor** - For writing, editing, or running code
+- **spawn_planner** - For complex tasks that need a structured plan first
+
+**When to use the planner:**
+Use spawn_planner when the request involves:
+- Multiple files or components
+- Multi-step implementations
+- Refactoring across the codebase
+- Features that require design decisions
+- Tasks you estimate would take more than 2-3 simple steps
 
 As foreman, you:
-1. Delegate clear, specific tasks to agents
-2. Review the agent's work when they report back
-3. If the work is incomplete or has errors, spawn another agent to fix it
+1. Assess task complexity - simple tasks go direct to explorer/executor
+2. Complex tasks go to planner first for a structured approach
+3. Review agent work and spawn follow-ups if needed
 4. Provide a final summary to the user
 
 **Rules:**
 - NEVER read, write, or search files yourself - always delegate
 - For questions about code -> spawn_explorer
 - For requests to change/create/run code -> spawn_executor
+- For complex multi-step tasks -> spawn_planner first
 - For greetings or general questions -> respond directly
-- Review agent work critically - spawn follow-up agents if needed
 
 Project directory: {project_dir}
 """
@@ -107,7 +119,63 @@ AGENT_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_planner",
+            "description": "Delegate to planner agent to break down a complex task into steps. Use for multi-step tasks, refactoring, or features requiring design.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The complex task to plan"
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
 ]
+
+
+class AgentSemaphore:
+    """Dynamic semaphore for controlling concurrent agent execution."""
+
+    def __init__(self, max_concurrent: int = 5):
+        self._max = max_concurrent
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._active_count = 0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        """Acquire a slot for agent execution."""
+        await self._semaphore.acquire()
+        async with self._lock:
+            self._active_count += 1
+
+    def release(self):
+        """Release a slot after agent completion."""
+        self._semaphore.release()
+        asyncio.create_task(self._decrement_count())
+
+    async def _decrement_count(self):
+        async with self._lock:
+            self._active_count -= 1
+
+    @property
+    def active_agents(self) -> int:
+        return self._active_count
+
+    @property
+    def available_slots(self) -> int:
+        return self._max - self._active_count
+
+    def adjust_max(self, new_max: int):
+        """Dynamically adjust max concurrent agents (for resource regulation)."""
+        # Note: This is a simplified version. Full implementation would
+        # need to handle in-flight tasks carefully.
+        self._max = max(1, new_max)
 
 
 class ChatAgent:
@@ -116,6 +184,7 @@ class ChatAgent:
     This agent understands user requests and either:
     1. Answers directly (knowledge base role)
     2. Delegates to agents, reviews their work, and supervises fixes (foreman role)
+    3. Uses planner for complex tasks, then executes the plan with parallel agents
     """
 
     def __init__(
@@ -135,6 +204,7 @@ class ChatAgent:
         # Lazy-loaded specialized agents
         self._explorer_agent = None
         self._executor_agent = None
+        self._planner_agent = None
 
         # System prompt
         self.system_prompt = CHAT_SYSTEM_PROMPT.format(project_dir=project_dir)
@@ -142,19 +212,58 @@ class ChatAgent:
         # Max supervision iterations (prevent infinite loops)
         self.max_supervision_rounds = 3
 
-    def _get_explorer_agent(self):
-        """Lazy-load explorer agent."""
+        # Agent concurrency control
+        max_agents = settings.regulators.max_concurrent_agents
+        self.agent_semaphore = AgentSemaphore(max_concurrent=max_agents)
+        self.agent_timeout = settings.regulators.agent_timeout_seconds
+
+    def _get_explorer_agent(self, lite: bool = False):
+        """
+        Get explorer agent, optionally using lightweight model.
+
+        Args:
+            lite: If True, use lightweight model for simple searches
+        """
+        # For lite mode, always create fresh with lite model
+        if lite:
+            from .explorer import ExplorerAgent
+            model = getattr(self.settings.models, 'exploration_lite', self.settings.models.orchestration)
+            return ExplorerAgent(
+                ollama_client=self.client,
+                working_dir=self.project_dir,
+                model=model,
+            )
+
+        # Standard explorer (cached)
         if self._explorer_agent is None:
             from .explorer import ExplorerAgent
+            model = getattr(self.settings.models, 'exploration', self.settings.models.orchestration)
             self._explorer_agent = ExplorerAgent(
                 ollama_client=self.client,
                 working_dir=self.project_dir,
-                model=self.settings.models.orchestration,
+                model=model,
             )
         return self._explorer_agent
 
-    def _get_executor_agent(self):
-        """Lazy-load executor agent."""
+    def _get_executor_agent(self, lite: bool = False):
+        """
+        Get executor agent, optionally using lightweight model.
+
+        Args:
+            lite: If True, use lightweight model for simple edits
+        """
+        # For lite mode, always create fresh with lite model
+        if lite:
+            from .executor import ExecutorAgent
+            model = getattr(self.settings.models, 'execution_lite', self.settings.models.execution)
+            console.print(f"[dim](using lite model: {model})[/dim]")
+            return ExecutorAgent(
+                ollama_client=self.client,
+                working_dir=self.project_dir,
+                model=model,
+            )
+
+        # Standard executor (cached)
         if self._executor_agent is None:
             from .executor import ExecutorAgent
             self._executor_agent = ExecutorAgent(
@@ -164,32 +273,219 @@ class ChatAgent:
             )
         return self._executor_agent
 
-    async def _spawn_agent(self, agent_type: str, task: str) -> tuple[bool, str]:
+    def _get_planner_agent(self):
+        """Lazy-load planner agent."""
+        if self._planner_agent is None:
+            from .planner import PlannerAgent
+            self._planner_agent = PlannerAgent(
+                ollama_client=self.client,
+                model=self.settings.models.planning,
+            )
+        return self._planner_agent
+
+    def _estimate_complexity(self, task: str) -> str:
+        """
+        Estimate task complexity to decide which model tier to use.
+
+        Returns: "simple", "moderate", or "complex"
+        """
+        task_lower = task.lower()
+
+        # Simple tasks - single file, basic operations
+        simple_patterns = [
+            "read ", "show ", "display ", "print ", "cat ",
+            "find file", "list files", "what is", "where is",
+            "add comment", "fix typo", "rename variable",
+            "simple", "quick", "just ",
+        ]
+        if any(p in task_lower for p in simple_patterns):
+            return "simple"
+
+        # Complex tasks - multi-file, refactoring, features
+        complex_patterns = [
+            "refactor", "restructure", "redesign", "architect",
+            "implement feature", "add feature", "create system",
+            "multiple files", "across the codebase", "all files",
+            "migrate", "upgrade", "overhaul",
+        ]
+        if any(p in task_lower for p in complex_patterns):
+            return "complex"
+
+        # Moderate - default for most tasks
+        return "moderate"
+
+    async def _spawn_agent(
+        self,
+        agent_type: str,
+        task: str,
+        force_lite: bool = False,
+        force_full: bool = False,
+    ) -> Tuple[bool, str]:
         """
         Spawn a specialized agent to handle a task.
+
+        Automatically selects lite or full model based on task complexity,
+        unless force_lite or force_full is specified.
+
+        Args:
+            agent_type: "explorer", "executor", or "planner"
+            task: Task description
+            force_lite: Force use of lightweight model
+            force_full: Force use of full model
 
         Returns:
             Tuple of (success, output)
         """
+        # Determine model tier based on complexity
+        complexity = self._estimate_complexity(task)
+        use_lite = force_lite or (complexity == "simple" and not force_full)
+
         if agent_type == "explorer":
-            console.print(f"[cyan]> Spawning explorer agent...[/cyan]")
-            agent = self._get_explorer_agent()
+            tier = "lite" if use_lite else "standard"
+            console.print(f"[cyan]> Spawning explorer agent ({tier})...[/cyan]")
+            agent = self._get_explorer_agent(lite=use_lite)
         elif agent_type == "executor":
-            console.print(f"[cyan]> Spawning executor agent...[/cyan]")
-            agent = self._get_executor_agent()
+            tier = "lite" if use_lite else "full"
+            console.print(f"[cyan]> Spawning executor agent ({tier})...[/cyan]")
+            agent = self._get_executor_agent(lite=use_lite)
+        elif agent_type == "planner":
+            console.print(f"[cyan]> Spawning planner agent...[/cyan]")
+            agent = self._get_planner_agent()
         else:
             return False, f"Unknown agent type: {agent_type}"
 
         try:
-            result = await agent.run(task)
-            return result.success, result.output if result.success else (result.error or "Unknown error")
+            # Acquire semaphore slot
+            await self.agent_semaphore.acquire()
+            try:
+                # Run with timeout
+                result = await asyncio.wait_for(
+                    agent.run(task),
+                    timeout=self.agent_timeout
+                )
+                return result.success, result.output if result.success else (result.error or "Unknown error")
+            finally:
+                self.agent_semaphore.release()
+        except asyncio.TimeoutError:
+            return False, f"Agent timed out after {self.agent_timeout} seconds"
         except Exception as e:
             return False, f"Agent failed: {str(e)}"
+
+    async def _spawn_agents_parallel(
+        self,
+        tasks: List[Tuple[str, str]]  # List of (agent_type, task)
+    ) -> List[Tuple[bool, str]]:
+        """
+        Spawn multiple agents in parallel, respecting max_concurrent_agents.
+
+        Args:
+            tasks: List of (agent_type, task_description) tuples
+
+        Returns:
+            List of (success, output) tuples in same order as input
+        """
+        console.print(f"[cyan]> Spawning {len(tasks)} agents (max {self.agent_semaphore._max} concurrent)...[/cyan]")
+
+        async def run_task(agent_type: str, task: str, index: int) -> Tuple[int, bool, str]:
+            success, output = await self._spawn_agent(agent_type, task)
+            return index, success, output
+
+        # Create tasks
+        coroutines = [
+            run_task(agent_type, task, i)
+            for i, (agent_type, task) in enumerate(tasks)
+        ]
+
+        # Run with concurrency control (semaphore is checked in _spawn_agent)
+        results_unordered = await asyncio.gather(*coroutines, return_exceptions=True)
+
+        # Sort back to original order and handle exceptions
+        results = [None] * len(tasks)
+        for result in results_unordered:
+            if isinstance(result, Exception):
+                # Find first empty slot for exception
+                for i in range(len(results)):
+                    if results[i] is None:
+                        results[i] = (False, str(result))
+                        break
+            else:
+                index, success, output = result
+                results[index] = (success, output)
+
+        return results
+
+    async def _execute_plan(self, plan, user_request: str) -> str:
+        """
+        Execute a plan by running agents according to parallel groups.
+
+        Args:
+            plan: Plan object from PlannerAgent
+            user_request: Original user request
+
+        Returns:
+            Combined results from all steps
+        """
+        from .planner import Plan
+
+        console.print(f"\n[bold cyan]Executing plan ({len(plan.steps)} steps)...[/bold cyan]")
+
+        step_results: Dict[int, Tuple[bool, str]] = {}
+        all_outputs = []
+
+        for group_num, group in enumerate(plan.parallel_groups, 1):
+            # Get steps for this group
+            group_steps = [s for s in plan.steps if s.step_num in group]
+
+            if not group_steps:
+                continue
+
+            console.print(f"\n[cyan]> Group {group_num}: executing {len(group_steps)} step(s) in parallel[/cyan]")
+
+            # Build tasks for parallel execution
+            tasks = [(step.agent_type, step.description) for step in group_steps]
+
+            # Execute in parallel
+            results = await self._spawn_agents_parallel(tasks)
+
+            # Store results
+            for step, (success, output) in zip(group_steps, results):
+                step_results[step.step_num] = (success, output)
+                status = "[green]✓[/green]" if success else "[red]✗[/red]"
+                console.print(f"  {status} Step {step.step_num}: {step.description[:50]}...")
+                all_outputs.append(f"### Step {step.step_num}: {step.description}\n{output}")
+
+        # Combine outputs
+        combined = "\n\n".join(all_outputs)
+
+        # Review the overall results
+        return await self._review_plan_execution(user_request, plan, combined, step_results)
+
+    async def _review_plan_execution(
+        self,
+        user_request: str,
+        plan,
+        combined_output: str,
+        step_results: Dict[int, Tuple[bool, str]]
+    ) -> str:
+        """Review the results of plan execution."""
+        failed_steps = [num for num, (success, _) in step_results.items() if not success]
+
+        if failed_steps:
+            console.print(f"[yellow]> {len(failed_steps)} step(s) failed, reviewing...[/yellow]")
+
+        # Use foreman to review and potentially fix
+        return await self._review_and_supervise(
+            user_request,
+            "plan_execution",
+            combined_output,
+            len(failed_steps) == 0,
+            round_num=1
+        )
 
     def _parse_tool_calls(self, response_text: str) -> List[Dict]:
         """Parse tool calls from response text."""
         tool_calls = []
-        valid_tools = {"spawn_explorer", "spawn_executor"}
+        valid_tools = {"spawn_explorer", "spawn_executor", "spawn_planner"}
 
         try:
             if "{" in response_text and "}" in response_text:
@@ -224,7 +520,7 @@ class ChatAgent:
 
         return tool_calls
 
-    async def _call_llm(self, messages: List[Message], use_tools: bool = True) -> tuple[str, List[Dict]]:
+    async def _call_llm(self, messages: List[Message], use_tools: bool = True) -> Tuple[str, List[Dict]]:
         """Call the LLM and return response text and tool calls."""
         response_text = ""
         tool_calls = []
@@ -250,7 +546,9 @@ class ChatAgent:
         # Check for agent keywords in response
         if not tool_calls:
             response_lower = response_text.lower()
-            if "spawn_explorer" in response_lower:
+            if "spawn_planner" in response_lower:
+                tool_calls = [{"name": "spawn_planner", "arguments": {"task": ""}}]
+            elif "spawn_explorer" in response_lower:
                 tool_calls = [{"name": "spawn_explorer", "arguments": {"task": ""}}]
             elif "spawn_executor" in response_lower:
                 tool_calls = [{"name": "spawn_executor", "arguments": {"task": ""}}]
@@ -306,7 +604,6 @@ class ChatAgent:
 
                 task = args.get("task", "")
                 if not task:
-                    # Use context from review to form task
                     task = f"Follow up on: {user_request}"
 
                 if name == "spawn_explorer":
@@ -336,6 +633,7 @@ class ChatAgent:
         The chat agent will either:
         1. Respond directly (knowledge base role)
         2. Delegate to agents and supervise (foreman role)
+        3. Use planner for complex tasks, then execute with parallel agents
         """
         messages = [
             Message(role="system", content=self.system_prompt),
@@ -363,7 +661,26 @@ class ChatAgent:
 
                 task = args.get("task", user_message)
 
-                if name == "spawn_explorer":
+                if name == "spawn_planner":
+                    # Get a plan first
+                    success, plan_output = await self._spawn_agent("planner", task)
+
+                    if success:
+                        # Parse and execute the plan
+                        planner = self._get_planner_agent()
+                        plan = planner._parse_plan(plan_output)
+
+                        if plan.steps:
+                            console.print(f"\n[bold]Plan created ({plan.complexity} complexity, {len(plan.steps)} steps)[/bold]")
+                            console.print(f"[dim]{plan.analysis}[/dim]\n")
+
+                            final_response = await self._execute_plan(plan, user_message)
+                        else:
+                            final_response = f"Plan created but no executable steps found:\n{plan_output}"
+                    else:
+                        final_response = f"Planning failed: {plan_output}"
+
+                elif name == "spawn_explorer":
                     success, output = await self._spawn_agent("explorer", task)
                     final_response = await self._review_and_supervise(
                         user_message, "explorer", output, success, round_num=1
@@ -392,3 +709,11 @@ class ChatAgent:
     def reset_conversation(self) -> None:
         """Reset the conversation history."""
         self.conversation_history = []
+
+    def get_agent_status(self) -> Dict:
+        """Get current agent concurrency status."""
+        return {
+            "active_agents": self.agent_semaphore.active_agents,
+            "available_slots": self.agent_semaphore.available_slots,
+            "max_concurrent": self.agent_semaphore._max,
+        }

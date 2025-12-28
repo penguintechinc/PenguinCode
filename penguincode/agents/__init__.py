@@ -4,6 +4,7 @@ from .base import AgentConfig, AgentResult, BaseAgent, Permission, TOOL_DEFINITI
 from .chat import ChatAgent
 from .executor import ExecutorAgent
 from .explorer import ExplorerAgent
+from .planner import Plan, PlannerAgent, PlanStep
 
 __all__ = [
     "BaseAgent",
@@ -14,4 +15,7 @@ __all__ = [
     "ChatAgent",
     "ExecutorAgent",
     "ExplorerAgent",
+    "Plan",
+    "PlannerAgent",
+    "PlanStep",
 ]

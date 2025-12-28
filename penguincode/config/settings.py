@@ -22,7 +22,12 @@ class ModelsConfig:
     planning: str = "deepseek-coder:6.7b"
     orchestration: str = "llama3.2:3b"
     research: str = "llama3.2:3b"
-    execution: str = "qwen2.5-coder:7b"
+    # Execution models - use lightweight for simple tasks, full for complex
+    execution: str = "qwen2.5-coder:7b"  # Complex execution (refactoring, multi-file)
+    execution_lite: str = "qwen2.5-coder:1.5b"  # Lightweight execution (simple edits)
+    # Exploration models
+    exploration: str = "llama3.2:3b"  # Standard exploration
+    exploration_lite: str = "llama3.2:1b"  # Quick file reads, simple searches
 
 
 @dataclass
@@ -163,7 +168,7 @@ class MemoryConfig:
 
 @dataclass
 class RegulatorsConfig:
-    """GPU rate limiting configuration."""
+    """GPU rate limiting and agent concurrency configuration."""
 
     auto_detect: bool = True
     gpu_type: str = "auto"
@@ -174,6 +179,9 @@ class RegulatorsConfig:
     request_queue_size: int = 10
     min_request_interval_ms: int = 100
     cooldown_after_error_ms: int = 1000
+    # Agent concurrency settings
+    max_concurrent_agents: int = 5  # Max agents running in parallel
+    agent_timeout_seconds: int = 300  # Timeout for individual agent tasks
 
 
 @dataclass

@@ -618,6 +618,68 @@ class ChatAgent:
 
         return response_text, tool_calls
 
+    def _detect_user_intent(self, user_message: str) -> Optional[str]:
+        """
+        Detect user intent from their message to determine which agent to spawn.
+
+        This is a fallback when the LLM doesn't properly call tools.
+
+        Args:
+            user_message: The user's message
+
+        Returns:
+            Agent name to spawn, or None if unclear
+        """
+        msg_lower = user_message.lower()
+
+        # Research patterns FIRST - check before executor to avoid false positives
+        # (e.g., "documentation for pytest" shouldn't trigger "pytest" -> executor)
+        if any(kw in msg_lower for kw in [
+            "how do i ", "how to ", "what is ", "explain ",
+            "documentation", "docs for ", "tutorial ",
+            "research ", "look up ",
+        ]):
+            return "spawn_researcher"
+
+        # Complex task patterns -> planner
+        if any(kw in msg_lower for kw in [
+            "implement ", "build a ", "create a system",
+            "refactor ", "redesign ", "architect ",
+        ]):
+            return "spawn_planner"
+
+        # File creation/writing patterns -> executor
+        if any(kw in msg_lower for kw in [
+            "create a file", "create file", "make a file", "make file",
+            "write a file", "write file", "save to file", "save file",
+            "add a file", "new file", "touch ", "echo ",
+        ]):
+            return "spawn_executor"
+
+        # Code execution patterns -> executor
+        if any(kw in msg_lower for kw in [
+            "run ", "execute ", "install ", "build ", "compile ",
+            "test ", "pytest", "npm ", "pip ", "cargo ",
+        ]):
+            return "spawn_executor"
+
+        # File editing patterns -> executor
+        if any(kw in msg_lower for kw in [
+            "edit ", "modify ", "change ", "update ", "fix ",
+            "add to ", "remove from ", "delete from ",
+        ]):
+            return "spawn_executor"
+
+        # Reading/exploring patterns -> explorer
+        if any(kw in msg_lower for kw in [
+            "read ", "show ", "display ", "what's in ", "what is in ",
+            "find ", "search ", "look for ", "where is ",
+            "list ", "ls ", "cat ",
+        ]):
+            return "spawn_explorer"
+
+        return None
+
     async def _review_and_supervise(
         self,
         user_request: str,
@@ -709,6 +771,13 @@ class ChatAgent:
         try:
             response_text, tool_calls = await self._call_llm(messages)
             console.print("            ", end="\r")
+
+            # If no tool calls from LLM, try to detect intent from user message
+            if not tool_calls:
+                user_intent = self._detect_user_intent(user_message)
+                if user_intent:
+                    console.print(f"[dim](detected intent: {user_intent})[/dim]")
+                    tool_calls = [{"name": user_intent, "arguments": {"task": user_message}}]
 
             # If tool calls, spawn agents and supervise
             if tool_calls:

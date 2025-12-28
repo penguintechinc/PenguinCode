@@ -424,6 +424,82 @@ class TestAgentLazyLoading:
             assert MockExplorer.call_count == 1
 
 
+class TestUserIntentDetection:
+    """Test the ChatAgent's ability to detect user intent from their message."""
+
+    @pytest.fixture
+    def chat_agent(self):
+        """Create a ChatAgent with mocked dependencies."""
+        mock_client = MagicMock()
+        settings = MockSettings()
+        return ChatAgent(
+            ollama_client=mock_client,
+            settings=settings,
+            project_dir="/test/project"
+        )
+
+    def test_detect_file_creation_intent(self, chat_agent):
+        """Test detecting executor intent from file creation request."""
+        result = chat_agent._detect_user_intent("Create a file called test.txt")
+        assert result == "spawn_executor"
+
+    def test_detect_file_writing_intent(self, chat_agent):
+        """Test detecting executor intent from file writing request."""
+        result = chat_agent._detect_user_intent("Write a file with hello world")
+        assert result == "spawn_executor"
+
+    def test_detect_run_command_intent(self, chat_agent):
+        """Test detecting executor intent from run command request."""
+        result = chat_agent._detect_user_intent("Run pytest on the tests")
+        assert result == "spawn_executor"
+
+    def test_detect_edit_intent(self, chat_agent):
+        """Test detecting executor intent from edit request."""
+        result = chat_agent._detect_user_intent("Edit the config file")
+        assert result == "spawn_executor"
+
+    def test_detect_read_intent(self, chat_agent):
+        """Test detecting explorer intent from read request."""
+        result = chat_agent._detect_user_intent("Read the README file")
+        assert result == "spawn_explorer"
+
+    def test_detect_show_intent(self, chat_agent):
+        """Test detecting explorer intent from show request."""
+        result = chat_agent._detect_user_intent("Show me the config")
+        assert result == "spawn_explorer"
+
+    def test_detect_find_intent(self, chat_agent):
+        """Test detecting explorer intent from find request."""
+        result = chat_agent._detect_user_intent("Find all Python files")
+        assert result == "spawn_explorer"
+
+    def test_detect_how_to_intent(self, chat_agent):
+        """Test detecting researcher intent from how-to question."""
+        result = chat_agent._detect_user_intent("How do I use FastAPI?")
+        assert result == "spawn_researcher"
+
+    def test_detect_documentation_intent(self, chat_agent):
+        """Test detecting researcher intent from documentation request."""
+        # "documentation" triggers researcher (not "show" which triggers explorer first)
+        result = chat_agent._detect_user_intent("I need documentation for pytest")
+        assert result == "spawn_researcher"
+
+    def test_detect_implement_intent(self, chat_agent):
+        """Test detecting planner intent from implement request."""
+        result = chat_agent._detect_user_intent("Implement a new authentication system")
+        assert result == "spawn_planner"
+
+    def test_detect_refactor_intent(self, chat_agent):
+        """Test detecting planner intent from refactor request."""
+        result = chat_agent._detect_user_intent("Refactor the database module")
+        assert result == "spawn_planner"
+
+    def test_detect_no_intent(self, chat_agent):
+        """Test that unclear messages return None."""
+        result = chat_agent._detect_user_intent("Hello, how are you?")
+        assert result is None
+
+
 class TestComplexityEstimation:
     """Test task complexity estimation for model selection."""
 

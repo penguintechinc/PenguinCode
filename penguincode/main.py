@@ -4,14 +4,18 @@ PenguinCode CLI - Main entry point for the chat and server modes.
 
 import asyncio
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
+import httpx
 import typer
 import yaml
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from penguincode.config.settings import load_settings
+from penguincode.config.settings import Settings, load_settings
 from penguincode.core import start_repl
 from penguincode.core.session import SessionManager
 
@@ -22,6 +26,12 @@ app = typer.Typer(
 )
 
 console = Console()
+
+# Default models to pull during setup
+DEFAULT_MODELS = [
+    "llama3.2:3b",
+    "qwen2.5-coder:7b",
+]
 
 
 @app.command()
@@ -183,6 +193,166 @@ def history(
 
     except Exception as e:
         console.print(f"[red]Error loading history: {str(e)}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def setup(
+    ollama_url: str = typer.Option(
+        "http://localhost:11434",
+        "--ollama-url",
+        help="Ollama API URL",
+    ),
+    pull_models: bool = typer.Option(
+        True,
+        "--pull-models/--no-pull-models",
+        help="Pull default models during setup",
+    ),
+    skip_ollama_check: bool = typer.Option(
+        False,
+        "--skip-ollama-check",
+        help="Skip Ollama connectivity check",
+    ),
+) -> None:
+    """Set up PenguinCode: check Ollama, pull models, create config directories."""
+    console.print("\n[bold cyan]PenguinCode Setup[/bold cyan]\n")
+
+    # Create config directories
+    console.print("[dim]Creating configuration directories...[/dim]")
+    config_dir = Path.home() / ".config" / "penguincode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"[green]✓[/green] Config directory: {config_dir}")
+
+    # Check Ollama connectivity
+    if not skip_ollama_check:
+        console.print(f"\n[dim]Checking Ollama at {ollama_url}...[/dim]")
+        try:
+            response = httpx.get(f"{ollama_url}/api/tags", timeout=10)
+            if response.status_code == 200:
+                console.print("[green]✓[/green] Ollama is running")
+                models = response.json().get("models", [])
+                if models:
+                    console.print(f"[dim]  Found {len(models)} model(s) installed[/dim]")
+            else:
+                console.print(f"[yellow]⚠[/yellow] Ollama responded with status {response.status_code}")
+        except httpx.ConnectError:
+            console.print("[red]✗[/red] Cannot connect to Ollama")
+            console.print(f"[dim]  Make sure Ollama is running: ollama serve[/dim]")
+            if not pull_models:
+                raise typer.Exit(1)
+            console.print("[yellow]⚠[/yellow] Skipping model pull (Ollama not available)")
+            pull_models = False
+        except Exception as e:
+            console.print(f"[red]✗[/red] Error checking Ollama: {e}")
+            pull_models = False
+
+    # Pull default models
+    if pull_models:
+        console.print("\n[dim]Pulling default models...[/dim]")
+        for model in DEFAULT_MODELS:
+            console.print(f"[dim]  Pulling {model}...[/dim]")
+            try:
+                result = subprocess.run(
+                    ["ollama", "pull", model],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout per model
+                )
+                if result.returncode == 0:
+                    console.print(f"[green]✓[/green] {model}")
+                else:
+                    console.print(f"[yellow]⚠[/yellow] {model}: {result.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                console.print(f"[yellow]⚠[/yellow] {model}: Pull timed out")
+            except FileNotFoundError:
+                console.print("[red]✗[/red] 'ollama' command not found")
+                console.print("[dim]  Install Ollama from https://ollama.ai[/dim]")
+                break
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] {model}: {e}")
+
+    console.print("\n[green]✓[/green] [bold]Setup complete![/bold]")
+    console.print("[dim]Run 'penguincode chat' to start chatting[/dim]\n")
+
+
+@app.command(name="install-extension")
+def install_extension(
+    vscode_path: str = typer.Option(
+        None,
+        "--vscode-path",
+        help="Path to VS Code extensions directory",
+    ),
+) -> None:
+    """Install the PenguinCode VS Code extension."""
+    console.print("\n[bold cyan]Installing VS Code Extension[/bold cyan]\n")
+
+    # Find the VSIX file
+    script_dir = Path(__file__).parent.parent
+    vsix_candidates = [
+        script_dir / "vsix-extension",
+        script_dir / "penguincode-vscode",
+        Path.cwd() / "vsix-extension",
+    ]
+
+    vsix_dir = None
+    for candidate in vsix_candidates:
+        if candidate.exists() and (candidate / "package.json").exists():
+            vsix_dir = candidate
+            break
+
+    if not vsix_dir:
+        console.print("[red]✗[/red] VS Code extension not found")
+        console.print("[dim]  Expected in: vsix-extension/ or penguincode-vscode/[/dim]")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Found extension at: {vsix_dir}[/dim]")
+
+    # Determine VS Code extensions directory
+    if vscode_path:
+        ext_dir = Path(vscode_path)
+    else:
+        # Default locations
+        if os.name == "nt":  # Windows
+            ext_dir = Path.home() / ".vscode" / "extensions"
+        elif os.uname().sysname == "Darwin":  # macOS
+            ext_dir = Path.home() / ".vscode" / "extensions"
+        else:  # Linux
+            ext_dir = Path.home() / ".vscode" / "extensions"
+
+    ext_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for code CLI
+    code_cmd = shutil.which("code")
+    if code_cmd:
+        console.print("[dim]Installing via VS Code CLI...[/dim]")
+        try:
+            # Try to install from the extension directory
+            result = subprocess.run(
+                ["code", "--install-extension", str(vsix_dir)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                console.print("[green]✓[/green] Extension installed successfully")
+                console.print("[dim]  Restart VS Code to activate[/dim]\n")
+                return
+            else:
+                console.print(f"[yellow]⚠[/yellow] CLI install failed: {result.stderr.strip()}")
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] CLI install error: {e}")
+
+    # Manual installation fallback
+    console.print("[dim]Performing manual installation...[/dim]")
+    target_dir = ext_dir / "penguincode.penguincode-vscode"
+
+    try:
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.copytree(vsix_dir, target_dir)
+        console.print(f"[green]✓[/green] Extension copied to {target_dir}")
+        console.print("[dim]  Restart VS Code to activate[/dim]\n")
+    except Exception as e:
+        console.print(f"[red]✗[/red] Installation failed: {e}")
         raise typer.Exit(1)
 
 

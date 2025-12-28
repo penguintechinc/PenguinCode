@@ -1,33 +1,71 @@
 """Explorer agent - handles codebase navigation and exploration."""
 
-import time
+from typing import Optional
 
 from .base import AgentConfig, AgentResult, BaseAgent, Permission
+from penguincode.ollama import OllamaClient
+
+
+EXPLORER_SYSTEM_PROMPT = """You are an Explorer agent responsible for navigating and understanding codebases.
+
+Your capabilities:
+- Read files to understand their content
+- Search code with grep to find patterns, function definitions, or references
+- Use glob to find files matching patterns (e.g., "**/*.py" for all Python files)
+
+Your limitations:
+- You CANNOT modify files or execute commands
+- You are read-only
+
+When given a task:
+1. First understand what information is needed
+2. Use glob to find relevant files if you don't know their names
+3. Use grep to search for specific patterns or code
+4. Use read to examine file contents
+5. Summarize your findings clearly
+
+Always provide concrete findings with file paths and relevant code snippets.
+Be thorough but concise in your exploration."""
 
 
 class ExplorerAgent(BaseAgent):
     """Agent for read-only codebase exploration."""
 
-    def __init__(self, *args, **kwargs):
-        """Initialize explorer agent with read-only permissions."""
-        if "config" not in kwargs:
-            kwargs["config"] = AgentConfig(
+    def __init__(
+        self,
+        ollama_client: OllamaClient,
+        working_dir: Optional[str] = None,
+        model: str = "llama3.2:3b",
+        config: Optional[AgentConfig] = None,
+    ):
+        """
+        Initialize explorer agent with read-only permissions.
+
+        Args:
+            ollama_client: Ollama client instance
+            working_dir: Working directory for file operations
+            model: Model to use (default: llama3.2:3b)
+            config: Optional custom config
+        """
+        if config is None:
+            config = AgentConfig(
                 name="explorer",
-                model="llama3.2:3b",
+                model=model,
                 description="Codebase navigation, file reading, search",
                 permissions=[Permission.READ, Permission.SEARCH],
-                system_prompt=(
-                    "You are an explorer agent responsible for navigating and understanding codebases.\n"
-                    "You can read files, search code with grep/glob, and summarize findings.\n"
-                    "You cannot modify files or execute commands.\n"
-                    "Provide clear, concise summaries of what you find."
-                ),
+                system_prompt=EXPLORER_SYSTEM_PROMPT,
+                max_iterations=10,
             )
-        super().__init__(*args, **kwargs)
+
+        super().__init__(
+            config=config,
+            ollama_client=ollama_client,
+            working_dir=working_dir,
+        )
 
     async def run(self, task: str, **kwargs) -> AgentResult:
         """
-        Explore codebase based on task.
+        Explore codebase based on task using the agentic loop.
 
         Args:
             task: Exploration task (e.g., "Find all Python files")
@@ -36,34 +74,5 @@ class ExplorerAgent(BaseAgent):
         Returns:
             AgentResult with exploration findings
         """
-        start_time = time.time()
-        tool_calls = []
-
-        try:
-            response = await self.chat(
-                f"Please explore the codebase to complete this task:\n\n{task}\n\n"
-                "Use grep and glob to search, and read files as needed. "
-                "Provide a summary of your findings."
-            )
-
-            duration_ms = (time.time() - start_time) * 1000
-
-            return AgentResult(
-                agent_name=self.config.name,
-                success=True,
-                output=response,
-                tool_calls=tool_calls,
-                tokens_used=0,
-                duration_ms=duration_ms,
-            )
-
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            return AgentResult(
-                agent_name=self.config.name,
-                success=False,
-                output="",
-                error=str(e),
-                tool_calls=tool_calls,
-                duration_ms=duration_ms,
-            )
+        # Use the agentic loop from base class
+        return await self.agentic_loop(task)

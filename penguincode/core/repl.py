@@ -6,7 +6,7 @@ from typing import Optional
 
 from rich.prompt import Prompt
 
-from penguincode.agents import ExecutorAgent, ExplorerAgent
+from penguincode.agents import ExecutorAgent, ExplorerAgent, Orchestrator
 from penguincode.config.settings import Settings, load_settings
 from penguincode.ollama import OllamaClient
 from penguincode.ui import console, print_error, print_info, print_success
@@ -15,7 +15,7 @@ from .session import Session, SessionManager
 
 
 class REPLSession:
-    """Interactive REPL session."""
+    """Interactive REPL session with agentic chat loop."""
 
     def __init__(self, project_dir: str = ".", config_path: str = "config.yaml"):
         """
@@ -43,8 +43,9 @@ class REPLSession:
         # Ollama client (will be initialized in async context)
         self.ollama_client: Optional[OllamaClient] = None
 
-        # Agents
+        # Agents and orchestrator
         self.agents = {}
+        self.orchestrator: Optional[Orchestrator] = None
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -55,12 +56,27 @@ class REPLSession:
         )
         await self.ollama_client.__aenter__()
 
-        # Initialize agents
+        # Initialize agents with models from settings
+        explorer_model = self.settings.models.orchestration  # Use fast model for exploration
+        executor_model = self.settings.models.execution  # Use coding model for execution
+
         self.agents["executor"] = ExecutorAgent(
-            ollama_client=self.ollama_client, working_dir=str(self.project_dir)
+            ollama_client=self.ollama_client,
+            working_dir=str(self.project_dir),
+            model=executor_model,
         )
         self.agents["explorer"] = ExplorerAgent(
-            ollama_client=self.ollama_client, working_dir=str(self.project_dir)
+            ollama_client=self.ollama_client,
+            working_dir=str(self.project_dir),
+            model=explorer_model,
+        )
+
+        # Initialize orchestrator
+        self.orchestrator = Orchestrator(
+            ollama_client=self.ollama_client,
+            settings=self.settings,
+            project_dir=str(self.project_dir),
+            agents=self.agents,
         )
 
         return self
@@ -94,6 +110,9 @@ class REPLSession:
             return False
         elif cmd == "/clear":
             console.clear()
+            if self.orchestrator:
+                self.orchestrator.reset_conversation()
+            print_info("Screen and conversation cleared")
         elif cmd == "/history":
             self.show_history()
         elif cmd == "/agents":
@@ -104,6 +123,10 @@ class REPLSession:
             await self.handle_explore(args)
         elif cmd == "/execute":
             await self.handle_execute(args)
+        elif cmd == "/reset":
+            if self.orchestrator:
+                self.orchestrator.reset_conversation()
+            print_info("Conversation reset")
         else:
             print_error(f"Unknown command: {cmd}")
             print_info("Type /help for available commands")
@@ -118,7 +141,8 @@ class REPLSession:
 [yellow]General:[/yellow]
   /help              Show this help message
   /exit, /quit       Exit PenguinCode
-  /clear             Clear the screen
+  /clear             Clear screen and reset conversation
+  /reset             Reset conversation history
   /history           Show conversation history
   /agents            List available agents
 
@@ -128,7 +152,15 @@ class REPLSession:
   /read <path>       Read a file
 
 [yellow]Chat:[/yellow]
-  Just type your message to chat with the orchestrator
+  Just type your message to chat with the orchestrator.
+  The orchestrator will automatically delegate to the right agent.
+
+[yellow]Examples:[/yellow]
+  > Find all Python files         (uses explorer)
+  > What does main.py do?         (uses explorer)
+  > Create a new file hello.py    (uses executor)
+  > Fix the bug in auth.py        (uses executor)
+  > Run the tests                 (uses executor)
 """
         console.print(help_text)
 
@@ -141,7 +173,10 @@ class REPLSession:
         console.print("\n[bold cyan]Session History:[/bold cyan]\n")
         for msg in self.session.messages:
             role_color = "green" if msg.role == "user" else "blue"
-            console.print(f"[{role_color}]{msg.role}:[/{role_color}] {msg.content}\n")
+            content = msg.content
+            if len(content) > 200:
+                content = content[:200] + "..."
+            console.print(f"[{role_color}]{msg.role}:[/{role_color}] {content}\n")
 
     def show_agents(self) -> None:
         """Show available agents."""
@@ -201,46 +236,28 @@ class REPLSession:
             print_error(result.error or "Execution failed")
 
     async def handle_chat(self, message: str) -> None:
-        """Handle regular chat messages by sending to Ollama."""
-        from penguincode.ollama import Message
+        """
+        Handle regular chat messages by sending to the orchestrator.
 
-        # Build conversation history for context
-        messages = [
-            Message(
-                role="system",
-                content=(
-                    f"You are PenguinCode, an AI coding assistant. "
-                    f"You are helping with a project in: {self.project_dir}\n"
-                    f"Be concise and helpful. If you need to explore files or run commands, "
-                    f"tell the user to use /explore or /execute commands."
-                ),
-            )
-        ]
+        The orchestrator decides which agent to spawn based on the message.
+        """
+        # Save user message to session
+        self.session.add_message("user", message)
 
-        # Add recent conversation history (last 10 messages)
-        for msg in self.session.messages[-10:]:
-            messages.append(Message(role=msg.role, content=msg.content))
+        console.print()  # Add some spacing
 
-        # Stream the response
-        console.print("\n[bold blue]Assistant[/bold blue]: ", end="")
-
-        full_response = ""
         try:
-            async for chunk in self.ollama_client.chat(
-                model=self.settings.models.orchestration,
-                messages=messages,
-                stream=True,
-            ):
-                if chunk.message and chunk.message.content:
-                    content = chunk.message.content
-                    console.print(content, end="")
-                    full_response += content
+            # Use orchestrator to process the message
+            response = await self.orchestrator.process(message)
 
-            console.print("\n")
+            # Display the response
+            console.print(f"\n[bold blue]Assistant:[/bold blue]")
+            console.print(response)
+            console.print()
 
             # Save assistant response to session
-            if full_response:
-                self.session.add_message("assistant", full_response)
+            if response:
+                self.session.add_message("assistant", response)
 
         except Exception as e:
             console.print(f"\n[red]Error: {str(e)}[/red]\n")
@@ -250,6 +267,7 @@ class REPLSession:
         """Run the REPL loop."""
         console.print("[bold cyan]PenguinCode Chat[/bold cyan]")
         console.print(f"Project: {self.project_dir}")
+        console.print(f"Models: orchestration={self.settings.models.orchestration}, execution={self.settings.models.execution}")
         console.print("\nType [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit\n")
 
         while True:
@@ -268,8 +286,7 @@ class REPLSession:
                     if not should_continue:
                         break
                 else:
-                    # Regular chat message - send to Ollama
-                    self.session.add_message("user", user_input)
+                    # Regular chat message - send to orchestrator
                     await self.handle_chat(user_input)
 
             except KeyboardInterrupt:

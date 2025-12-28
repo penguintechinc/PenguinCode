@@ -1,6 +1,8 @@
 """Interactive REPL loop for PenguinCode chat."""
 
 import asyncio
+import signal
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -607,44 +609,60 @@ class REPLSession:
         console.print(f"Models: orchestration={self.settings.models.orchestration}, execution={self.settings.models.execution}")
         console.print("\nType [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit\n")
 
-        # Track consecutive Ctrl+C presses
-        interrupt_count = 0
+        # Track consecutive Ctrl+C presses using closure
+        state = {"interrupt_count": 0, "should_exit": False}
 
-        while True:
-            try:
-                # Get user input
-                user_input = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: Prompt.ask("[bold green]You[/bold green]")
-                )
-
-                # Reset interrupt count on successful input
-                interrupt_count = 0
-
-                if not user_input.strip():
-                    continue
-
-                # Handle commands
-                if user_input.startswith("/"):
-                    should_continue = await self.handle_command(user_input)
-                    if not should_continue:
-                        break
-                else:
-                    # Regular chat message - send to orchestrator
-                    await self.handle_chat(user_input)
-
-            except KeyboardInterrupt:
-                interrupt_count += 1
-                if interrupt_count >= 2:
-                    console.print("\n")
-                    break
+        def signal_handler(signum, frame):
+            """Handle SIGINT (Ctrl+C)."""
+            state["interrupt_count"] += 1
+            if state["interrupt_count"] >= 2:
+                state["should_exit"] = True
+                console.print("\n")
+                print_info("Goodbye!")
+                sys.exit(0)
+            else:
                 console.print("\n[yellow]Press Ctrl+C again to exit[/yellow]\n")
-                continue
-            except EOFError:
-                break
-            except Exception as e:
-                print_error(f"Error: {str(e)}")
-                interrupt_count = 0  # Reset on other errors
-                continue
+                # Re-display prompt
+                console.print("[bold green]You[/bold green]: ", end="")
+
+        # Set up signal handler
+        original_handler = signal.signal(signal.SIGINT, signal_handler)
+
+        try:
+            while not state["should_exit"]:
+                try:
+                    # Get user input
+                    user_input = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: Prompt.ask("[bold green]You[/bold green]")
+                    )
+
+                    # Reset interrupt count on successful input
+                    state["interrupt_count"] = 0
+
+                    if not user_input.strip():
+                        continue
+
+                    # Handle commands
+                    if user_input.startswith("/"):
+                        should_continue = await self.handle_command(user_input)
+                        if not should_continue:
+                            break
+                    else:
+                        # Regular chat message - send to orchestrator
+                        await self.handle_chat(user_input)
+
+                except EOFError:
+                    break
+                except Exception as e:
+                    if "interrupt" in str(e).lower():
+                        # Treat as Ctrl+C
+                        continue
+                    print_error(f"Error: {str(e)}")
+                    state["interrupt_count"] = 0
+                    continue
+        finally:
+            # Restore original signal handler
+            signal.signal(signal.SIGINT, original_handler)
 
         print_info("Goodbye!")
 

@@ -19,11 +19,23 @@
 
 ## Features
 
-- 🤖 **Multi-Agent System** - Specialized agents for different coding tasks
+- 🤖 **Multi-Agent System** - ChatAgent orchestrates specialized Explorer/Executor agents
 - 🔍 **Multi-Engine Research** - 5 search engines with MCP protocol support
 - 🧠 **Persistent Memory** - mem0 integration for context across sessions
+- 📚 **Documentation RAG** - Auto-indexes docs for your project's languages and libraries
 - ⚡ **GPU Optimized** - Smart model switching for RTX 4060 Ti (8GB VRAM)
 - 🐧 **Cross-Platform** - Works on Linux, macOS, and Windows
+
+### Supported Languages
+
+| Language | Detection | Doc Sources |
+|----------|-----------|-------------|
+| Python | `pyproject.toml`, `requirements.txt`, `*.py` | Official docs + PyPI libraries |
+| JavaScript/TypeScript | `package.json`, `tsconfig.json` | MDN, npm packages |
+| Go | `go.mod`, `*.go` | go.dev, pkg.go.dev |
+| Rust | `Cargo.toml`, `*.rs` | docs.rs, crates.io |
+| OpenTofu/Terraform | `*.tf`, `*.tofu`, `.terraform.lock.hcl` | OpenTofu docs, provider registries |
+| Ansible | `ansible.cfg`, `playbook.yml`, `requirements.yml` | Ansible docs, Galaxy collections |
 
 ## Quick Start
 
@@ -44,6 +56,9 @@ penguincode chat
 ## Documentation
 
 - **[Usage Guide](docs/USAGE.md)** - Installation, configuration, and usage
+- **[Documentation RAG](docs/DOCS_RAG.md)** - Project-aware documentation indexing
+- **[Agent Architecture](docs/AGENTS.md)** - ChatAgent, Explorer, Executor, Planner
+- **[Security](docs/SECURITY.md)** - OWASP Top 10 compliance and secure code generation
 - **[Workflows](docs/WORKFLOWS.md)** - GitHub Actions and release process
 - **[Standards](docs/STANDARDS.md)** - Development standards
 - **[Contributing](docs/CONTRIBUTING.md)** - How to contribute

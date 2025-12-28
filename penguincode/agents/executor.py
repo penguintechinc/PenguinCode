@@ -29,6 +29,108 @@ IMPORTANT:
 - Be careful with bash commands - explain what each command does
 - When editing, make sure old_text matches EXACTLY (including whitespace)
 
+## SECURITY REQUIREMENTS (OWASP Top 10 Compliance)
+
+You MUST write secure code following these guidelines:
+
+### A01: Broken Access Control
+- Always implement proper authorization checks before sensitive operations
+- Use deny-by-default for access control
+- Never expose internal IDs directly (use UUIDs or indirect references)
+- Validate user permissions server-side, never trust client-side checks
+
+### A02: Cryptographic Failures
+- Never hardcode secrets, API keys, or passwords in code
+- Use environment variables or secret managers for sensitive config
+- Use strong, modern encryption (AES-256, bcrypt/argon2 for passwords)
+- Always use HTTPS for data in transit
+- Never store passwords in plaintext - always hash with salt
+
+### A03: Injection
+- Always use parameterized queries / prepared statements for SQL
+- Validate and sanitize all user inputs
+- Use ORM methods instead of raw SQL when possible
+- Escape output based on context (HTML, JS, SQL, shell)
+- Never construct shell commands with user input directly
+
+### A04: Insecure Design
+- Implement rate limiting for authentication endpoints
+- Use CSRF tokens for state-changing operations
+- Implement proper session management with secure cookies
+- Design with principle of least privilege
+
+### A05: Security Misconfiguration
+- Never expose stack traces or debug info in production
+- Disable unnecessary features and services
+- Set secure HTTP headers (CSP, X-Frame-Options, etc.)
+- Keep dependencies updated
+
+### A06: Vulnerable Components
+- Prefer well-maintained, actively developed libraries
+- Check for known vulnerabilities before adding dependencies
+- Pin dependency versions to avoid supply chain attacks
+
+### A07: Authentication Failures
+- Implement proper password policies
+- Use multi-factor authentication when possible
+- Implement account lockout after failed attempts
+- Use secure session tokens with proper expiration
+
+### A08: Data Integrity Failures
+- Validate all data from untrusted sources
+- Use integrity checks (checksums, signatures)
+- Verify software updates and dependencies
+
+### A09: Logging & Monitoring
+- Log security-relevant events (auth, access control, input validation)
+- Never log sensitive data (passwords, tokens, PII)
+- Include context in logs (user, IP, timestamp)
+
+### A10: Server-Side Request Forgery (SSRF)
+- Validate and sanitize all URLs before making requests
+- Use allowlists for permitted domains/IPs
+- Block requests to internal/private IP ranges
+
+## LANGUAGE-SPECIFIC SECURITY
+
+### Python
+- Use `secrets` module for cryptographic randomness, not `random`
+- Use `subprocess` with shell=False and list arguments
+- Avoid `eval()`, `exec()`, `pickle.loads()` with untrusted data
+- Use `html.escape()` for HTML output
+
+### JavaScript/TypeScript
+- Use `textContent` instead of `innerHTML` when possible
+- Validate all inputs with libraries like Zod
+- Use `encodeURIComponent()` for URL parameters
+- Set `httpOnly` and `secure` flags on cookies
+
+### SQL
+- Always use parameterized queries
+- Never concatenate user input into queries
+- Use least-privilege database accounts
+
+### Shell/Bash
+- Quote all variables: "$variable" not $variable
+- Use arrays for commands with arguments
+- Avoid eval with user input
+
+### OpenTofu/Terraform
+- Never hardcode credentials in .tf files
+- Use variables with sensitive=true for secrets
+- Store state files securely (encrypted backend)
+- Use least-privilege IAM roles for providers
+- Enable encryption for resources (S3, RDS, etc.)
+- Use private subnets for sensitive resources
+
+### Ansible
+- Never store passwords in plaintext playbooks
+- Use ansible-vault for sensitive data
+- Use become only when necessary
+- Validate inputs in custom modules
+- Set no_log: true for tasks with secrets
+- Use SSH keys, not passwords for authentication
+
 Provide clear feedback about what was changed and any verification steps taken."""
 
 

@@ -44,6 +44,16 @@ LANGUAGE_DOCS: Dict[Language, DocSource] = {
         api_docs_path="std/",
         guide_path="book/",
     ),
+    Language.HCL: DocSource(
+        base_url="https://opentofu.org/docs/",
+        api_docs_path="cli/",
+        guide_path="intro/",
+    ),
+    Language.ANSIBLE: DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/",
+        api_docs_path="collections/",
+        guide_path="playbook_guide/",
+    ),
 }
 
 # Popular library documentation sources
@@ -199,6 +209,89 @@ LIBRARY_DOCS: Dict[str, DocSource] = {
     ),
     "reqwest": DocSource(
         base_url="https://docs.rs/reqwest/latest/reqwest/",
+    ),
+
+    # OpenTofu/Terraform providers
+    "aws": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/aws/latest/docs",
+        api_docs_path="resources/",
+    ),
+    "azurerm": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs",
+        api_docs_path="resources/",
+    ),
+    "google": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/google/latest/docs",
+        api_docs_path="resources/",
+    ),
+    "kubernetes": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs",
+        api_docs_path="resources/",
+    ),
+    "helm": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/helm/latest/docs",
+    ),
+    "docker": DocSource(
+        base_url="https://registry.terraform.io/providers/kreuzwerker/docker/latest/docs",
+    ),
+    "cloudflare": DocSource(
+        base_url="https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs",
+    ),
+    "digitalocean": DocSource(
+        base_url="https://registry.terraform.io/providers/digitalocean/digitalocean/latest/docs",
+    ),
+    "random": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/random/latest/docs",
+    ),
+    "null": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/null/latest/docs",
+    ),
+    "local": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/local/latest/docs",
+    ),
+    "tls": DocSource(
+        base_url="https://registry.terraform.io/providers/hashicorp/tls/latest/docs",
+    ),
+
+    # Ansible collections
+    "ansible.builtin": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/ansible/builtin/",
+    ),
+    "ansible.posix": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/ansible/posix/",
+    ),
+    "ansible.netcommon": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/ansible/netcommon/",
+    ),
+    "community.general": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/general/",
+    ),
+    "community.docker": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/docker/",
+    ),
+    "community.kubernetes": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/kubernetes/",
+    ),
+    "community.aws": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/aws/",
+    ),
+    "community.postgresql": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/postgresql/",
+    ),
+    "community.mysql": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/community/mysql/",
+    ),
+    "amazon.aws": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/amazon/aws/",
+    ),
+    "azure.azcollection": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/azure/azcollection/",
+    ),
+    "google.cloud": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/google/cloud/",
+    ),
+    "kubernetes.core": DocSource(
+        base_url="https://docs.ansible.com/ansible/latest/collections/kubernetes/core/",
     ),
 }
 

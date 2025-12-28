@@ -19,6 +19,8 @@ LANGUAGE_INDICATORS: Dict[Language, List[str]] = {
     Language.TYPESCRIPT: ["*.ts", "*.tsx", "tsconfig.json"],
     Language.GO: ["*.go", "go.mod", "go.sum"],
     Language.RUST: ["*.rs", "Cargo.toml"],
+    Language.HCL: ["*.tf", "*.tofu", ".terraform.lock.hcl"],
+    Language.ANSIBLE: ["ansible.cfg", "playbook.yml", "playbook.yaml", "site.yml", "site.yaml"],
 }
 
 # Dependency files and their languages
@@ -73,6 +75,26 @@ class ProjectDetector:
             if (self.project_dir / "tsconfig.json").exists():
                 languages.add(Language.TYPESCRIPT)
 
+        # Check for OpenTofu/Terraform
+        if any((self.project_dir / f).exists() for f in [".terraform.lock.hcl"]):
+            languages.add(Language.HCL)
+        elif list(self.project_dir.glob("*.tf")) or list(self.project_dir.glob("*.tofu")):
+            languages.add(Language.HCL)
+            libs = self._parse_hcl_providers()
+            libraries.extend(libs)
+
+        # Check for Ansible
+        ansible_indicators = ["ansible.cfg", "playbook.yml", "playbook.yaml", "site.yml", "site.yaml"]
+        if any((self.project_dir / f).exists() for f in ansible_indicators):
+            languages.add(Language.ANSIBLE)
+            libs = self._parse_ansible_requirements()
+            libraries.extend(libs)
+        # Also check for roles/ or inventory/ directories
+        elif (self.project_dir / "roles").exists() or (self.project_dir / "inventory").exists():
+            languages.add(Language.ANSIBLE)
+            libs = self._parse_ansible_requirements()
+            libraries.extend(libs)
+
         return ProjectContext(
             languages=list(languages),
             libraries=libraries,
@@ -97,6 +119,8 @@ class ProjectDetector:
             ".tsx": Language.TYPESCRIPT,
             ".go": Language.GO,
             ".rs": Language.RUST,
+            ".tf": Language.HCL,
+            ".tofu": Language.HCL,
         }
 
         for scan_dir in scan_dirs:
@@ -333,5 +357,187 @@ class ProjectDetector:
                             language=Language.RUST,
                             version=match.group(2),
                         ))
+
+        return libraries
+
+    def _parse_hcl_providers(self) -> List[Library]:
+        """Parse OpenTofu/Terraform files for provider dependencies."""
+        libraries = []
+        seen_providers: Set[str] = set()
+
+        # Look for provider blocks in .tf files
+        tf_files = list(self.project_dir.glob("*.tf")) + list(self.project_dir.glob("*.tofu"))
+
+        for tf_file in tf_files:
+            try:
+                content = tf_file.read_text()
+
+                # Match provider blocks: provider "aws" { ... }
+                provider_blocks = re.findall(r'provider\s+"([^"]+)"', content)
+                for provider in provider_blocks:
+                    if provider not in seen_providers:
+                        seen_providers.add(provider)
+                        libraries.append(Library(
+                            name=provider,
+                            language=Language.HCL,
+                        ))
+
+                # Match required_providers blocks
+                # required_providers { aws = { source = "hashicorp/aws" version = "~> 5.0" } }
+                req_providers = re.findall(
+                    r'(\w+)\s*=\s*\{[^}]*source\s*=\s*"([^"]+)"[^}]*(?:version\s*=\s*"([^"]+)")?',
+                    content,
+                    re.DOTALL
+                )
+                for name, source, version in req_providers:
+                    if name not in seen_providers:
+                        seen_providers.add(name)
+                        libraries.append(Library(
+                            name=name,
+                            language=Language.HCL,
+                            version=version if version else None,
+                        ))
+
+            except Exception:
+                pass
+
+        # Also check .terraform.lock.hcl for locked providers
+        lock_file = self.project_dir / ".terraform.lock.hcl"
+        if lock_file.exists():
+            try:
+                content = lock_file.read_text()
+                # Match provider "registry.terraform.io/hashicorp/aws" { version = "5.0.0" }
+                locked = re.findall(
+                    r'provider\s+"[^"]*?/([^/"]+)"\s*\{[^}]*version\s*=\s*"([^"]+)"',
+                    content,
+                    re.DOTALL
+                )
+                for name, version in locked:
+                    if name not in seen_providers:
+                        seen_providers.add(name)
+                        libraries.append(Library(
+                            name=name,
+                            language=Language.HCL,
+                            version=version,
+                        ))
+            except Exception:
+                pass
+
+        return libraries
+
+    def _parse_ansible_requirements(self) -> List[Library]:
+        """Parse Ansible requirements.yml for collections and roles."""
+        libraries = []
+
+        # Check for requirements.yml (collections/roles)
+        req_files = ["requirements.yml", "requirements.yaml", "collections/requirements.yml"]
+
+        for req_file in req_files:
+            req_path = self.project_dir / req_file
+            if req_path.exists():
+                try:
+                    content = req_path.read_text()
+                    libs = self._parse_ansible_requirements_content(content)
+                    libraries.extend(libs)
+                except Exception:
+                    pass
+
+        # Check for galaxy.yml (if this is a collection)
+        galaxy_file = self.project_dir / "galaxy.yml"
+        if galaxy_file.exists():
+            try:
+                content = galaxy_file.read_text()
+                libs = self._parse_galaxy_yml(content)
+                libraries.extend(libs)
+            except Exception:
+                pass
+
+        return libraries
+
+    def _parse_ansible_requirements_content(self, content: str) -> List[Library]:
+        """Parse Ansible requirements.yml content."""
+        libraries = []
+
+        try:
+            import yaml
+            data = yaml.safe_load(content)
+
+            if not data:
+                return libraries
+
+            # Handle collections list
+            collections = data.get("collections", [])
+            if isinstance(collections, list):
+                for coll in collections:
+                    if isinstance(coll, str):
+                        libraries.append(Library(
+                            name=coll,
+                            language=Language.ANSIBLE,
+                        ))
+                    elif isinstance(coll, dict):
+                        name = coll.get("name", "")
+                        version = coll.get("version")
+                        if name:
+                            libraries.append(Library(
+                                name=name,
+                                language=Language.ANSIBLE,
+                                version=version,
+                            ))
+
+            # Handle roles list
+            roles = data.get("roles", [])
+            if isinstance(roles, list):
+                for role in roles:
+                    if isinstance(role, str):
+                        libraries.append(Library(
+                            name=role,
+                            language=Language.ANSIBLE,
+                        ))
+                    elif isinstance(role, dict):
+                        name = role.get("name") or role.get("src", "")
+                        version = role.get("version")
+                        if name:
+                            libraries.append(Library(
+                                name=name,
+                                language=Language.ANSIBLE,
+                                version=version,
+                            ))
+
+        except ImportError:
+            # Fallback: simple regex parsing
+            coll_pattern = r'^\s*-\s*name:\s*([^\s#]+)'
+            for match in re.finditer(coll_pattern, content, re.MULTILINE):
+                libraries.append(Library(
+                    name=match.group(1),
+                    language=Language.ANSIBLE,
+                ))
+        except Exception:
+            pass
+
+        return libraries
+
+    def _parse_galaxy_yml(self, content: str) -> List[Library]:
+        """Parse galaxy.yml for collection dependencies."""
+        libraries = []
+
+        try:
+            import yaml
+            data = yaml.safe_load(content)
+
+            if not data:
+                return libraries
+
+            # Get dependencies
+            deps = data.get("dependencies", {})
+            if isinstance(deps, dict):
+                for name, version in deps.items():
+                    libraries.append(Library(
+                        name=name,
+                        language=Language.ANSIBLE,
+                        version=version if isinstance(version, str) else None,
+                    ))
+
+        except Exception:
+            pass
 
         return libraries

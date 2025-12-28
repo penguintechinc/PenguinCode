@@ -240,12 +240,25 @@ penguincode chat
 # Example interaction:
 > Search for best practices in Python async programming
 
-# The researcher agent will:
-# 1. Search using configured engine (DuckDuckGo by default)
-# 2. Fetch and analyze relevant pages
-# 3. Store findings in memory
+# The ChatAgent will:
+# 1. Delegate to Explorer agent for research
+# 2. Inject relevant documentation context
+# 3. Review agent output
 # 4. Provide summarized response
 ```
+
+### Documentation Commands
+
+```bash
+# In chat session:
+> /docs status     # Show indexed documentation status
+> /docs detect     # Re-detect project languages/libraries
+> /docs index      # Index docs for all detected libraries
+> /docs search     # Search indexed documentation
+> /docs cleanup    # Remove expired/unused docs
+```
+
+See [DOCS_RAG.md](DOCS_RAG.md) for full documentation.
 
 ### Server Mode
 
@@ -496,36 +509,44 @@ await manager.delete_memory(memory_id="mem_abc123")
 
 ## Agents
 
+PenguinCode uses a ChatAgent orchestrator that delegates to specialized agents.
+
 ### Agent Roles
 
 | Agent | Model | Purpose | When to Use |
 |-------|-------|---------|-------------|
-| **Planner** | deepseek-coder:6.7b | Break down tasks, architecture | Start of complex tasks |
-| **Researcher** | llama3.2:3b | Web search, documentation | Need external information |
+| **ChatAgent** | llama3.2:3b | Orchestration, knowledge base | Always (main interface) |
+| **Explorer** | llama3.2:3b | Search, analyze code | Understanding codebase |
 | **Executor** | qwen2.5-coder:7b | Write/modify code | Implementing features |
-| **Reviewer** | codellama:7b | Code quality, best practices | Before committing code |
-| **Debugger** | deepseek-coder:6.7b | Analyze errors, fix bugs | Troubleshooting issues |
-| **Tester** | qwen2.5-coder:7b | Generate tests | Need test coverage |
-| **Docs** | mistral:7b | Documentation generation | Writing docs |
+| **Planner** | deepseek-coder:6.7b | Break down complex tasks | Multi-step implementations |
+
+### Resource-Smart Model Selection
+
+Agents automatically select lite or full models based on task complexity:
+
+| Complexity | Explorer | Executor |
+|------------|----------|----------|
+| Simple | llama3.2:1b | qwen2.5-coder:1.5b |
+| Moderate/Complex | llama3.2:3b | qwen2.5-coder:7b |
 
 ### Agent Configuration
 
-Override agent models in config:
-
 ```yaml
+models:
+  orchestration: "llama3.2:3b"
+  exploration: "llama3.2:3b"
+  exploration_lite: "llama3.2:1b"
+  execution: "qwen2.5-coder:7b"
+  execution_lite: "qwen2.5-coder:1.5b"
+  planning: "deepseek-coder:6.7b"
+
 agents:
-  researcher:
-    model: "llama3.2:3b"
-    description: "Web research, summarization"
-
-  executor:
-    model: "qwen2.5-coder:7b"
-    description: "Code mutations, file writes"
-
-  planner:
-    model: "deepseek-coder:6.7b"
-    description: "Implementation planning"
+  max_concurrent: 5        # Max parallel agents
+  timeout_seconds: 300     # Agent timeout
+  max_rounds: 10          # Max supervision rounds
 ```
+
+See [AGENTS.md](AGENTS.md) for detailed architecture documentation.
 
 ---
 

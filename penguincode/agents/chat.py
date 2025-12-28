@@ -33,6 +33,7 @@ For any code or file operations, you MUST delegate to specialized agents.
 **Available function calls:**
 - spawn_executor - Use this for: creating files, writing files, editing code, running commands
 - spawn_explorer - Use this for: reading files, searching code, finding files
+- spawn_researcher - Use this for: web searches, documentation lookup, research tasks
 - spawn_planner - Use this for: complex multi-step tasks
 
 **CRITICAL: You cannot create, write, edit, or read files directly. You MUST call an agent function.**
@@ -46,6 +47,9 @@ Correct response: Call spawn_executor with task "Create a file called test.txt c
 
 Example - User: "What's in the README?"
 Correct response: Call spawn_explorer with task "Read and summarize the README file"
+
+Example - User: "How do I use FastAPI dependency injection?"
+Correct response: Call spawn_researcher with task "Search for FastAPI dependency injection documentation and examples"
 
 **When to use spawn_planner:**
 Only for complex tasks involving multiple files or requiring design decisions.
@@ -109,6 +113,23 @@ AGENT_TOOLS = [
                     "task": {
                         "type": "string",
                         "description": "Detailed task for the executor"
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_researcher",
+            "description": "Delegate to researcher agent for web searches, documentation lookup, and information gathering. Use when user asks about external topics, documentation, or needs web research.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The research task or question to investigate"
                     }
                 },
                 "required": ["task"]
@@ -201,6 +222,7 @@ class ChatAgent:
         self._explorer_agent = None
         self._executor_agent = None
         self._planner_agent = None
+        self._researcher_agent = None
 
         # System prompt
         self.system_prompt = CHAT_SYSTEM_PROMPT.format(project_dir=project_dir)
@@ -279,6 +301,20 @@ class ChatAgent:
             )
         return self._planner_agent
 
+    def _get_researcher_agent(self):
+        """Lazy-load researcher agent."""
+        if self._researcher_agent is None:
+            from .researcher import ResearcherAgent
+            # Get research model from settings, fallback to orchestration model
+            model = getattr(self.settings.models, 'research', self.settings.models.orchestration)
+            self._researcher_agent = ResearcherAgent(
+                ollama_client=self.client,
+                research_config=self.settings.research,
+                working_dir=self.project_dir,
+                model=model,
+            )
+        return self._researcher_agent
+
     def _estimate_complexity(self, task: str) -> str:
         """
         Estimate task complexity to decide which model tier to use.
@@ -347,6 +383,9 @@ class ChatAgent:
         elif agent_type == "planner":
             console.print(f"[cyan]> Spawning planner agent...[/cyan]")
             agent = self._get_planner_agent()
+        elif agent_type == "researcher":
+            console.print(f"[cyan]> Spawning researcher agent...[/cyan]")
+            agent = self._get_researcher_agent()
         else:
             return False, f"Unknown agent type: {agent_type}"
 
@@ -481,7 +520,7 @@ class ChatAgent:
     def _parse_tool_calls(self, response_text: str) -> List[Dict]:
         """Parse tool calls from response text."""
         tool_calls = []
-        valid_tools = {"spawn_explorer", "spawn_executor", "spawn_planner"}
+        valid_tools = {"spawn_explorer", "spawn_executor", "spawn_planner", "spawn_researcher"}
 
         try:
             if "{" in response_text and "}" in response_text:
@@ -546,6 +585,8 @@ class ChatAgent:
             # Check for explicit function mentions
             if "spawn_planner" in response_lower or "planner agent" in response_lower:
                 tool_calls = [{"name": "spawn_planner", "arguments": {"task": ""}}]
+            elif "spawn_researcher" in response_lower or "researcher agent" in response_lower:
+                tool_calls = [{"name": "spawn_researcher", "arguments": {"task": ""}}]
             elif "spawn_explorer" in response_lower or "explorer agent" in response_lower:
                 tool_calls = [{"name": "spawn_explorer", "arguments": {"task": ""}}]
             elif "spawn_executor" in response_lower or "executor agent" in response_lower:
@@ -567,6 +608,13 @@ class ChatAgent:
                 "read the file", "check the file", "examine",
             ]):
                 tool_calls = [{"name": "spawn_explorer", "arguments": {"task": ""}}]
+            # Detect research/documentation lookup language
+            elif any(kw in response_lower for kw in [
+                "search the web", "web search", "look up documentation",
+                "find documentation", "research this", "let me research",
+                "i'll look up", "search online", "check the docs",
+            ]):
+                tool_calls = [{"name": "spawn_researcher", "arguments": {"task": ""}}]
 
         return response_text, tool_calls
 
@@ -704,6 +752,11 @@ class ChatAgent:
                     success, output = await self._spawn_agent("executor", task)
                     final_response = await self._review_and_supervise(
                         user_message, "executor", output, success, round_num=1
+                    )
+                elif name == "spawn_researcher":
+                    success, output = await self._spawn_agent("researcher", task)
+                    final_response = await self._review_and_supervise(
+                        user_message, "researcher", output, success, round_num=1
                     )
                 else:
                     final_response = response_text

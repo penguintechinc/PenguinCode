@@ -196,6 +196,45 @@ class UsageAPIConfig:
 
 
 @dataclass
+class DocsRagConfig:
+    """Documentation RAG configuration.
+
+    Controls automatic indexing of documentation for detected
+    languages and libraries. Only indexes docs for libraries
+    actually used in the project to avoid bloat.
+    """
+
+    enabled: bool = True
+    cache_dir: str = "./.penguincode/docs"
+    collection: str = "penguincode_docs"
+    # Limits to prevent bloat
+    max_pages_per_library: int = 50
+    max_libraries_to_index: int = 20  # Only index top N libraries
+    cache_max_age_days: int = 7
+    # Chunking settings
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    # Context injection limits
+    max_context_tokens: int = 2000
+    max_chunks_per_query: int = 5
+    # Behavior settings
+    auto_detect_on_start: bool = True
+    auto_index_on_detect: bool = False  # Require explicit /docs index
+    # Library priority - index these first if detected
+    priority_libraries: list = field(default_factory=lambda: [
+        # Python
+        "fastapi", "django", "flask", "sqlalchemy", "pydantic",
+        "requests", "aiohttp", "pytest", "numpy", "pandas",
+        # JavaScript/TypeScript
+        "react", "vue", "next", "express", "axios", "prisma",
+        # Go
+        "gin", "echo", "fiber", "gorm",
+        # Rust
+        "tokio", "serde", "actix-web", "diesel",
+    ])
+
+
+@dataclass
 class Settings:
     """Main settings configuration."""
 
@@ -209,6 +248,7 @@ class Settings:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     regulators: RegulatorsConfig = field(default_factory=RegulatorsConfig)
     usage_api: UsageAPIConfig = field(default_factory=UsageAPIConfig)
+    docs_rag: DocsRagConfig = field(default_factory=DocsRagConfig)
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "Settings":
@@ -233,6 +273,7 @@ class Settings:
             memory=cls._parse_memory_config(data.get("memory", {})),
             regulators=RegulatorsConfig(**data.get("regulators", {})),
             usage_api=UsageAPIConfig(**data.get("usage_api", {})),
+            docs_rag=cls._parse_docs_rag_config(data.get("docs_rag", {})),
         )
 
     @staticmethod
@@ -279,6 +320,25 @@ class Settings:
             vector_store=data.get("vector_store", "chroma"),
             embedding_model=data.get("embedding_model", "nomic-embed-text"),
             stores=stores,
+        )
+
+    @staticmethod
+    def _parse_docs_rag_config(data: Dict[str, Any]) -> DocsRagConfig:
+        """Parse documentation RAG configuration."""
+        return DocsRagConfig(
+            enabled=data.get("enabled", True),
+            cache_dir=data.get("cache_dir", "./.penguincode/docs"),
+            collection=data.get("collection", "penguincode_docs"),
+            max_pages_per_library=data.get("max_pages_per_library", 50),
+            max_libraries_to_index=data.get("max_libraries_to_index", 20),
+            cache_max_age_days=data.get("cache_max_age_days", 7),
+            chunk_size=data.get("chunk_size", 1000),
+            chunk_overlap=data.get("chunk_overlap", 200),
+            max_context_tokens=data.get("max_context_tokens", 2000),
+            max_chunks_per_query=data.get("max_chunks_per_query", 5),
+            auto_detect_on_start=data.get("auto_detect_on_start", True),
+            auto_index_on_detect=data.get("auto_index_on_detect", False),
+            priority_libraries=data.get("priority_libraries", DocsRagConfig().priority_libraries),
         )
 
 

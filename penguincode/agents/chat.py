@@ -28,35 +28,31 @@ You have two roles:
 For general questions, greetings, or explaining concepts - respond directly without spawning agents.
 
 ## Role 2: Foreman (Job Supervisor)
-For any code or file operations, you delegate to specialized agents and supervise their work.
+For any code or file operations, you MUST delegate to specialized agents.
 
-**Available agents:**
-- **spawn_explorer** - For reading, searching, or understanding code
-- **spawn_executor** - For writing, editing, or running code
-- **spawn_planner** - For complex tasks that need a structured plan first
+**Available function calls:**
+- spawn_executor - Use this for: creating files, writing files, editing code, running commands
+- spawn_explorer - Use this for: reading files, searching code, finding files
+- spawn_planner - Use this for: complex multi-step tasks
 
-**When to use the planner:**
-Use spawn_planner when the request involves:
-- Multiple files or components
-- Multi-step implementations
-- Refactoring across the codebase
-- Features that require design decisions
-- Tasks you estimate would take more than 2-3 simple steps
+**CRITICAL: You cannot create, write, edit, or read files directly. You MUST call an agent function.**
 
-As foreman, you:
-1. Assess task complexity - simple tasks go direct to explorer/executor
-2. Complex tasks go to planner first for a structured approach
-3. Review agent work and spawn follow-ups if needed
-4. Provide a final summary to the user
+When user asks to create/write/edit a file or run a command:
+1. Immediately call spawn_executor with the task
+2. Do NOT say "I will create..." - just call the function
 
-**Rules:**
-- NEVER read, write, or search files yourself - always delegate
-- For questions about code -> spawn_explorer
-- For requests to change/create/run code -> spawn_executor
-- For complex multi-step tasks -> spawn_planner first
-- For greetings or general questions -> respond directly
+Example - User: "Create a file called test.txt with hello world"
+Correct response: Call spawn_executor with task "Create a file called test.txt containing 'hello world'"
+
+Example - User: "What's in the README?"
+Correct response: Call spawn_explorer with task "Read and summarize the README file"
+
+**When to use spawn_planner:**
+Only for complex tasks involving multiple files or requiring design decisions.
 
 Project directory: {project_dir}
+
+Remember: For ANY file operation, you MUST call spawn_executor or spawn_explorer. Never just describe what you would do.
 """
 
 REVIEW_PROMPT = """You are reviewing work done by a specialized agent.
@@ -543,15 +539,34 @@ class ChatAgent:
         if not tool_calls:
             tool_calls = self._parse_tool_calls(response_text)
 
-        # Check for agent keywords in response
+        # Check for agent keywords in response - more robust detection
         if not tool_calls:
             response_lower = response_text.lower()
-            if "spawn_planner" in response_lower:
+
+            # Check for explicit function mentions
+            if "spawn_planner" in response_lower or "planner agent" in response_lower:
                 tool_calls = [{"name": "spawn_planner", "arguments": {"task": ""}}]
-            elif "spawn_explorer" in response_lower:
+            elif "spawn_explorer" in response_lower or "explorer agent" in response_lower:
                 tool_calls = [{"name": "spawn_explorer", "arguments": {"task": ""}}]
-            elif "spawn_executor" in response_lower:
+            elif "spawn_executor" in response_lower or "executor agent" in response_lower:
                 tool_calls = [{"name": "spawn_executor", "arguments": {"task": ""}}]
+            # Detect action-oriented language that needs executor
+            elif any(kw in response_lower for kw in [
+                "create the file", "write the file", "create a file",
+                "write to file", "creating file", "writing file",
+                "let me create", "i'll create", "i will create",
+                "let me write", "i'll write", "i will write",
+                "execute", "run the command", "run command",
+                "add the file", "make the file",
+            ]):
+                tool_calls = [{"name": "spawn_executor", "arguments": {"task": ""}}]
+            # Detect read/search oriented language that needs explorer
+            elif any(kw in response_lower for kw in [
+                "let me search", "let me look", "let me find",
+                "searching for", "looking for", "i'll search",
+                "read the file", "check the file", "examine",
+            ]):
+                tool_calls = [{"name": "spawn_explorer", "arguments": {"task": ""}}]
 
         return response_text, tool_calls
 

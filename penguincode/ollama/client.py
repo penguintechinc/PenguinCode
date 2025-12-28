@@ -1,0 +1,252 @@
+"""Async Ollama API client."""
+
+import json
+from typing import AsyncIterator, Dict, List, Optional
+
+import httpx
+
+from .types import (
+    ChatRequest,
+    ChatResponse,
+    GenerateRequest,
+    GenerateResponse,
+    Message,
+    ModelInfo,
+)
+
+
+class OllamaClient:
+    """Async client for Ollama API."""
+
+    def __init__(self, base_url: str = "http://localhost:11434", timeout: int = 120):
+        """
+        Initialize Ollama client.
+
+        Args:
+            base_url: Ollama API base URL
+            timeout: Request timeout in seconds
+        """
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(self.timeout),
+            follow_redirects=True,
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """Get or create HTTP client."""
+        if self._client is None:
+            raise RuntimeError("Client not initialized. Use 'async with' context manager.")
+        return self._client
+
+    async def generate(
+        self,
+        model: str,
+        prompt: str,
+        system: Optional[str] = None,
+        stream: bool = True,
+        **kwargs,
+    ) -> AsyncIterator[GenerateResponse]:
+        """
+        Generate completion from prompt.
+
+        Args:
+            model: Model name
+            prompt: Prompt text
+            system: System prompt
+            stream: Whether to stream responses
+            **kwargs: Additional generation parameters
+
+        Yields:
+            GenerateResponse objects
+        """
+        request = GenerateRequest(
+            model=model,
+            prompt=prompt,
+            system=system,
+            stream=stream,
+            **kwargs,
+        )
+
+        async with self.client.stream(
+            "POST",
+            "/api/generate",
+            json=self._to_dict(request),
+        ) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.strip():
+                    data = json.loads(line)
+                    yield GenerateResponse(**data)
+
+    async def chat(
+        self,
+        model: str,
+        messages: List[Message],
+        stream: bool = True,
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ) -> AsyncIterator[ChatResponse]:
+        """
+        Chat with model using message history.
+
+        Args:
+            model: Model name
+            messages: List of messages
+            stream: Whether to stream responses
+            tools: Optional tool definitions
+            **kwargs: Additional chat parameters
+
+        Yields:
+            ChatResponse objects
+        """
+        request = ChatRequest(
+            model=model,
+            messages=messages,
+            stream=stream,
+            tools=tools,
+            **kwargs,
+        )
+
+        async with self.client.stream(
+            "POST",
+            "/api/chat",
+            json=self._to_dict(request),
+        ) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.strip():
+                    data = json.loads(line)
+                    # Convert message dict to Message object
+                    if "message" in data:
+                        data["message"] = Message(**data["message"])
+                    yield ChatResponse(**data)
+
+    async def list_models(self) -> List[ModelInfo]:
+        """
+        List available models.
+
+        Returns:
+            List of ModelInfo objects
+        """
+        response = await self.client.get("/api/tags")
+        response.raise_for_status()
+        data = response.json()
+        return [ModelInfo(**model) for model in data.get("models", [])]
+
+    async def show_model(self, name: str) -> Dict:
+        """
+        Get model information.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Model info dictionary
+        """
+        response = await self.client.post(
+            "/api/show",
+            json={"name": name},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def pull_model(self, name: str) -> AsyncIterator[Dict]:
+        """
+        Pull a model from registry.
+
+        Args:
+            name: Model name
+
+        Yields:
+            Progress dictionaries
+        """
+        async with self.client.stream(
+            "POST",
+            "/api/pull",
+            json={"name": name},
+        ) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.strip():
+                    yield json.loads(line)
+
+    async def delete_model(self, name: str) -> bool:
+        """
+        Delete a model.
+
+        Args:
+            name: Model name
+
+        Returns:
+            True if successful
+        """
+        response = await self.client.delete(
+            "/api/delete",
+            json={"name": name},
+        )
+        response.raise_for_status()
+        return True
+
+    async def check_health(self) -> bool:
+        """
+        Check if Ollama server is healthy.
+
+        Returns:
+            True if server is responding
+        """
+        try:
+            response = await self.client.get("/")
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    @staticmethod
+    def _to_dict(obj) -> Dict:
+        """Convert dataclass to dict, removing None values."""
+        if hasattr(obj, "__dataclass_fields__"):
+            result = {}
+            for key, value in obj.__dict__.items():
+                if value is not None:
+                    if isinstance(value, list) and value and hasattr(value[0], "__dict__"):
+                        result[key] = [
+                            OllamaClient._to_dict(item) if hasattr(item, "__dataclass_fields__") else item.__dict__
+                            for item in value
+                        ]
+                    elif hasattr(value, "__dataclass_fields__"):
+                        result[key] = OllamaClient._to_dict(value)
+                    else:
+                        result[key] = value
+            return result
+        return obj.__dict__
+
+
+# Convenience function
+async def create_client(base_url: str = "http://localhost:11434", timeout: int = 120) -> OllamaClient:
+    """
+    Create and return an Ollama client.
+
+    Args:
+        base_url: Ollama API base URL
+        timeout: Request timeout
+
+    Returns:
+        OllamaClient instance (use with async context manager)
+    """
+    return OllamaClient(base_url, timeout)

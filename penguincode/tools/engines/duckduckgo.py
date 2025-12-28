@@ -1,8 +1,9 @@
 """DuckDuckGo search engine implementation."""
 
+import asyncio
 from typing import List
 
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import DDGS
 
 from .base import BaseSearchEngine, SearchEngineError, SearchResult
 
@@ -37,22 +38,30 @@ class DuckDuckGoEngine(BaseSearchEngine):
             SearchEngineError: If search fails
         """
         try:
-            async with AsyncDDGS() as ddgs:
-                results = []
-                async for result in ddgs.text(
-                    keywords=query,
-                    region=self.region,
-                    safesearch=self.safesearch,
-                    max_results=max_results,
-                ):
-                    search_result = self._create_result(
-                        title=result.get("title", ""),
-                        url=result.get("href", ""),
-                        snippet=result.get("body", ""),
+            # Run sync DDGS in executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            raw_results = await loop.run_in_executor(
+                None,
+                lambda: list(
+                    DDGS().text(
+                        keywords=query,
+                        region=self.region,
+                        safesearch=self.safesearch,
+                        max_results=max_results,
                     )
-                    results.append(search_result)
+                ),
+            )
 
-                return results
+            results = []
+            for result in raw_results:
+                search_result = self._create_result(
+                    title=result.get("title", ""),
+                    url=result.get("href", ""),
+                    snippet=result.get("body", ""),
+                )
+                results.append(search_result)
+
+            return results
 
         except Exception as e:
             raise SearchEngineError(f"DuckDuckGo search failed: {e}") from e

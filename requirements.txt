@@ -1,0 +1,33 @@
+# Auto-generated from pyproject.toml
+# Install with: pip install -r requirements.txt
+# Or use: pip install -e . (recommended for development)
+
+# CLI & UI
+typer[all]>=0.9.0
+rich>=13.0.0
+
+# Async & HTTP
+httpx>=0.27.0
+aiohttp>=3.9.0
+aiofiles>=24.0.0
+
+# Configuration
+pyyaml>=6.0
+markdown-it-py>=3.0.0
+
+# Search & Tools
+duckduckgo-search>=8.0.0
+pathspec>=0.12.0
+beautifulsoup4>=4.12.0
+
+# Memory Layer (mem0)
+mem0ai>=0.1.0
+chromadb>=0.4.0
+qdrant-client>=1.7.0
+psycopg2-binary>=2.9.0
+
+# Server Mode
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+websockets>=14.0
+pyjwt>=2.9.0

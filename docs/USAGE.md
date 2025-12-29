@@ -50,17 +50,17 @@ penguincode setup
 
 ```bash
 # Required models
-ollama pull llama3.2:3b          # Research, orchestration (1.5GB)
+ollama pull llama3.2:3b          # Research, orchestration (2GB)
 ollama pull qwen2.5-coder:7b     # Code execution (4.7GB)
-ollama pull deepseek-coder:6.7b  # Planning, debugging (3.8GB)
-
-# Optional for memory features
-ollama pull nomic-embed-text     # Embeddings (274MB)
+ollama pull nomic-embed-text     # Required for docs RAG (274MB)
 
 # Optional additional models
+ollama pull deepseek-coder:6.7b  # Planning, debugging (3.8GB)
 ollama pull codellama:7b         # Code review (3.8GB)
 ollama pull mistral:7b           # Documentation (4.1GB)
 ```
+
+**Note**: `nomic-embed-text` is required for documentation RAG indexing. Without it, you'll see "Indexed 0 chunks" errors.
 
 **Model selection by task**:
 - **Chat/Research**: llama3.2:3b (fast, general purpose)
@@ -607,7 +607,9 @@ research:
 
 ## Logging
 
-PenguinCode uses Python's standard logging library. All logs go to `/tmp/penguincode.log`.
+PenguinCode uses Python's standard logging library. Each session creates a new log file with an epoch timestamp: `/tmp/penguincode-{epoch}.log`
+
+**Example**: `/tmp/penguincode-1735417523.log`
 
 ### Log Levels
 
@@ -621,15 +623,18 @@ PenguinCode uses Python's standard logging library. All logs go to `/tmp/penguin
 ### Viewing Logs
 
 ```bash
-# Watch logs in real-time
-tail -f /tmp/penguincode.log
+# Find latest log file
+ls -t /tmp/penguincode-*.log | head -1
+
+# Watch latest log in real-time
+tail -f $(ls -t /tmp/penguincode-*.log | head -1)
 
 # Filter by level
-grep "\[ERROR\]" /tmp/penguincode.log
-grep "\[WARNING\]" /tmp/penguincode.log
+grep "\[ERROR\]" /tmp/penguincode-*.log
+grep "\[WARNING\]" /tmp/penguincode-*.log
 
-# Clear logs
-> /tmp/penguincode.log
+# Clean up old logs
+rm /tmp/penguincode-*.log
 ```
 
 ### Debug Mode
@@ -769,5 +774,5 @@ research:
 
 ---
 
-**Last Updated**: 2025-12-27
+**Last Updated**: 2025-12-28
 **See Also**: [WORKFLOWS.md](WORKFLOWS.md), [STANDARDS.md](STANDARDS.md)

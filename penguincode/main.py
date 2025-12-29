@@ -31,6 +31,7 @@ console = Console()
 DEFAULT_MODELS = [
     "llama3.2:3b",
     "qwen2.5-coder:7b",
+    "nomic-embed-text",  # Required for docs RAG
 ]
 
 

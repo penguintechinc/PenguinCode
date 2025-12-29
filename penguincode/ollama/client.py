@@ -12,6 +12,7 @@ from .types import (
     GenerateResponse,
     Message,
     ModelInfo,
+    ToolCall,
 )
 
 
@@ -135,10 +136,18 @@ class OllamaClient:
                     # Convert message dict to Message object
                     if "message" in data:
                         msg_data = data["message"]
+                        # Parse tool_calls if present
+                        tool_calls = None
+                        if "tool_calls" in msg_data and msg_data["tool_calls"]:
+                            tool_calls = [
+                                ToolCall(function=tc.get("function", {}))
+                                for tc in msg_data["tool_calls"]
+                            ]
                         data["message"] = Message(
                             role=msg_data.get("role", "assistant"),
                             content=msg_data.get("content", ""),
                             images=msg_data.get("images"),
+                            tool_calls=tool_calls,
                         )
                     # Filter to known ChatResponse fields to handle API changes
                     known_fields = {

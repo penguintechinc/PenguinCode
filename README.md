@@ -23,7 +23,8 @@
 - 🔍 **Multi-Engine Research** - 5 search engines with MCP protocol support
 - 🧠 **Persistent Memory** - mem0 integration for context across sessions
 - 📚 **Documentation RAG** - Auto-indexes docs for your project's languages and libraries
-- ⚡ **GPU Optimized** - Smart model switching for RTX 4060 Ti (8GB VRAM)
+- 🔌 **MCP Integration** - Extend with N8N, Flowise, and custom MCP servers
+- ⚡ **GPU Optimized** - Smart model switching for RTX 4060 Ti (8GB VRAM) or higher
 - 🐧 **Cross-Platform** - Works on Linux, macOS, and Windows
 
 ### Supported Languages
@@ -44,8 +45,8 @@
 pip install -e .
 penguincode setup
 
-# Pull models
-ollama pull llama3.2:3b qwen2.5-coder:7b deepseek-coder:6.7b
+# Pull required models
+ollama pull llama3.2:3b qwen2.5-coder:7b nomic-embed-text
 
 # Run
 penguincode chat
@@ -56,6 +57,8 @@ penguincode chat
 ## Documentation
 
 - **[Usage Guide](docs/USAGE.md)** - Installation, configuration, and usage
+- **[MCP Integration](docs/MCP.md)** - Extend with N8N, Flowise, and custom servers
+- **[Tool Support](docs/TOOL_SUPPORT.md)** - Ollama models with native tool calling
 - **[Documentation RAG](docs/DOCS_RAG.md)** - Project-aware documentation indexing
 - **[Agent Architecture](docs/AGENTS.md)** - ChatAgent, Explorer, Executor, Planner
 - **[Security](docs/SECURITY.md)** - OWASP Top 10 compliance and secure code generation

@@ -18,6 +18,7 @@ from .session import Session, SessionManager
 # Lazy imports to avoid circular dependency
 if TYPE_CHECKING:
     from penguincode.agents import ChatAgent, ExecutorAgent, ExplorerAgent
+    from penguincode.tools.memory import MemoryManager
 
 
 class REPLSession:
@@ -59,10 +60,14 @@ class REPLSession:
         self.docs_indexer = None
         self.context_injector = None
 
+        # Memory manager for cross-session persistence (initialized in async context)
+        self.memory_manager: Optional["MemoryManager"] = None
+
     async def __aenter__(self):
         """Async context manager entry."""
         # Lazy import agents to avoid circular import
         from penguincode.agents import ChatAgent, ExecutorAgent, ExplorerAgent
+        from penguincode.tools.memory import MemoryManager
 
         # Initialize Ollama client
         self.ollama_client = OllamaClient(
@@ -71,11 +76,27 @@ class REPLSession:
         )
         await self.ollama_client.__aenter__()
 
-        # Initialize chat agent (main orchestrator)
+        # Initialize memory manager for cross-session persistence
+        if self.settings.memory.enabled:
+            try:
+                self.memory_manager = MemoryManager(
+                    config=self.settings.memory,
+                    ollama_url=self.settings.ollama.api_url,
+                    llm_model=self.settings.models.orchestration,
+                )
+                if self.memory_manager.is_enabled():
+                    print_info("Memory layer initialized")
+            except Exception as e:
+                print_info(f"Memory layer unavailable: {e}")
+                self.memory_manager = None
+
+        # Initialize chat agent (main orchestrator) with memory support
         self.chat_agent = ChatAgent(
             ollama_client=self.ollama_client,
             settings=self.settings,
             project_dir=str(self.project_dir),
+            memory_manager=self.memory_manager,
+            session_id=self.session.session_id,
         )
 
         # Keep direct agent references for manual commands (/explore, /execute)
@@ -758,7 +779,8 @@ class REPLSession:
                 state["should_exit"] = True
                 console.print("\n")
                 print_info("Goodbye!")
-                sys.exit(0)
+                # Raise KeyboardInterrupt to break out of the input loop
+                raise KeyboardInterrupt()
             else:
                 console.print("\n[yellow]Press Ctrl+C again to exit[/yellow]\n")
                 # Re-display prompt
@@ -792,9 +814,17 @@ class REPLSession:
 
                 except EOFError:
                     break
+                except KeyboardInterrupt:
+                    # Check if we should exit (double Ctrl+C)
+                    if state["should_exit"]:
+                        break
+                    # Single Ctrl+C - continue loop
+                    continue
                 except Exception as e:
                     if "interrupt" in str(e).lower():
                         # Treat as Ctrl+C
+                        if state["should_exit"]:
+                            break
                         continue
                     print_error(f"Error: {str(e)}")
                     state["interrupt_count"] = 0
@@ -803,7 +833,8 @@ class REPLSession:
             # Restore original signal handler
             signal.signal(signal.SIGINT, original_handler)
 
-        print_info("Goodbye!")
+        if not state["should_exit"]:
+            print_info("Goodbye!")
 
 
 async def start_repl(project_dir: str = ".", config_path: str = "config.yaml") -> None:

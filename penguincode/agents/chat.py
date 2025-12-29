@@ -20,7 +20,7 @@ from penguincode.config.settings import Settings
 from penguincode.ui import console
 from penguincode.core.debug import (
     log_llm_request, log_llm_response, log_agent_spawn,
-    log_agent_result, log_intent_detection, log_error, warning
+    log_agent_result, log_intent_detection, log_error, warning, debug
 )
 
 
@@ -221,21 +221,41 @@ class ChatAgent:
     1. Answers directly (knowledge base role)
     2. Delegates to agents, reviews their work, and supervises fixes (foreman role)
     3. Uses planner for complex tasks, then executes the plan with parallel agents
+
+    Features:
+    - Conversation history with auto-compaction
+    - Long-term memory via mem0 (cross-session persistence)
+    - Context injection from relevant memories
     """
+
+    # Context management constants
+    # These are percentages of the model's context window
+    CONTEXT_THRESHOLD_PERCENT = 70  # Compact when history exceeds this % of context
+    CONTEXT_RESERVE_PERCENT = 30    # Reserve this % for new messages + response
+    MAX_MEMORY_RESULTS = 5          # Max memories to inject
+    # Approximate chars per token (for estimation)
+    CHARS_PER_TOKEN = 4
 
     def __init__(
         self,
         ollama_client: OllamaClient,
         settings: Settings,
         project_dir: str,
+        memory_manager=None,
+        session_id: str = None,
     ):
         self.client = ollama_client
         self.settings = settings
         self.project_dir = project_dir
         self.model = settings.models.orchestration
 
-        # Conversation history
+        # Conversation history with compaction support
         self.conversation_history: List[Message] = []
+        self.conversation_summary: str = ""  # Summary of compacted history
+
+        # Memory integration (cross-session persistence)
+        self.memory_manager = memory_manager
+        self.session_id = session_id or "default"
 
         # Lazy-loaded specialized agents
         self._explorer_agent = None
@@ -586,28 +606,66 @@ class ChatAgent:
         return tool_calls
 
     async def _call_llm(self, messages: List[Message], use_tools: bool = True, timeout: float = 60.0) -> Tuple[str, List[Dict]]:
-        """Call the LLM and return response text and tool calls."""
+        """Call the LLM and return response text and tool calls.
+
+        Note: Most local models don't support Ollama's native tool calling API.
+        We don't pass tools to avoid empty responses, and instead rely on
+        JSON parsing from the text response. The system prompt instructs the
+        model to output JSON tool calls.
+
+        Models that DO support native tools: llama3.1, mistral-nemo, firefunction-v2, command-r+
+        Models that DON'T: llama3.2, qwen2.5-coder, codellama, deepseek-coder
+        """
         response_text = ""
         tool_calls = []
 
+        # Check if model supports native tool calling
+        # See: https://ollama.com/search?c=tools for full list
+        # See: https://ollama.com/blog/tool-support for implementation details
+        native_tool_models = {
+            # Llama family
+            "llama3.1", "llama3.2", "llama3.3", "llama4",
+            # Mistral family
+            "mistral", "mistral-nemo", "mistral-small", "mistral-large", "mixtral",
+            # Cohere Command-R family
+            "command-r", "command-r-plus", "command-r7b",
+            # Qwen family
+            "qwen2.5", "qwen2.5-coder", "qwen3",
+            # Others
+            "firefunction-v2", "hermes3",
+        }
+        model_base = self.model.split(":")[0].lower()
+        supports_native_tools = any(m in model_base for m in native_tool_models)
+
+        # Only pass tools if model supports them AND caller wants tools
+        pass_tools = use_tools and supports_native_tools
+
         # Debug logging
-        log_llm_request(self.model, messages, AGENT_TOOLS if use_tools else None)
+        log_llm_request(self.model, messages, AGENT_TOOLS if pass_tools else None)
 
         try:
             async with asyncio.timeout(timeout):
                 async for chunk in self.client.chat(
                     model=self.model,
                     messages=messages,
-                    tools=AGENT_TOOLS if use_tools else None,
+                    tools=AGENT_TOOLS if pass_tools else None,
                     stream=True,
                 ):
                     if chunk.message and chunk.message.content:
                         response_text += chunk.message.content
 
-                    if chunk.done and hasattr(chunk, "message"):
+                    # Check for tool_calls in ANY chunk, not just done=true
+                    # Ollama sends tool_calls in early chunks with done=false
+                    if hasattr(chunk, "message") and chunk.message:
                         msg = chunk.message
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            tool_calls.extend(msg.tool_calls)
+                            # Convert ToolCall objects to dict format
+                            for tc in msg.tool_calls:
+                                func = tc.function if hasattr(tc, 'function') else tc
+                                tool_calls.append({
+                                    "name": func.get("name", "") if isinstance(func, dict) else getattr(func, "name", ""),
+                                    "arguments": func.get("arguments", {}) if isinstance(func, dict) else getattr(func, "arguments", {}),
+                                })
         except asyncio.TimeoutError:
             warning("LLM response timed out after %s seconds", timeout)
             console.print("[yellow]LLM response timed out[/yellow]")
@@ -812,9 +870,30 @@ class ChatAgent:
         1. Respond directly (knowledge base role)
         2. Delegate to agents and supervise (foreman role)
         3. Use planner for complex tasks, then execute with parallel agents
+
+        Context management:
+        - Searches long-term memory for relevant context
+        - Includes conversation summary if history was compacted
+        - Auto-compacts history when approaching context window limit
+        - Extracts and stores important facts after each exchange
         """
+        # Check if we need to compact history before processing
+        if self._needs_compaction():
+            await self._compact_history()
+
+        # Search long-term memory for relevant context
+        memories = await self._search_memories(user_message)
+
+        # Build context from memories and summary
+        context = self._build_context_with_memories(memories, self.conversation_summary)
+
+        # Build system prompt with context
+        system_content = self.system_prompt
+        if context:
+            system_content = f"{context}---\n\n{self.system_prompt}"
+
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(role="system", content=system_content),
         ]
         messages.extend(self.conversation_history[-10:])
         messages.append(Message(role="user", content=user_message))
@@ -889,11 +968,19 @@ class ChatAgent:
 
                 self.conversation_history.append(Message(role="user", content=user_message))
                 self.conversation_history.append(Message(role="assistant", content=final_response))
+
+                # Extract and store important memories (best-effort, non-blocking)
+                asyncio.create_task(self._extract_and_store_memories(user_message, final_response))
+
                 return final_response
 
             # No tool calls - direct response (knowledge base role)
             self.conversation_history.append(Message(role="user", content=user_message))
             self.conversation_history.append(Message(role="assistant", content=response_text))
+
+            # Extract and store important memories (best-effort, non-blocking)
+            asyncio.create_task(self._extract_and_store_memories(user_message, response_text))
+
             return response_text
 
         except Exception as e:
@@ -903,6 +990,7 @@ class ChatAgent:
     def reset_conversation(self) -> None:
         """Reset the conversation history."""
         self.conversation_history = []
+        self.conversation_summary = ""
 
     def get_agent_status(self) -> Dict:
         """Get current agent concurrency status."""
@@ -911,3 +999,177 @@ class ChatAgent:
             "available_slots": self.agent_semaphore.available_slots,
             "max_concurrent": self.agent_semaphore._max,
         }
+
+    # ==================== Context Management ====================
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count from text (rough approximation)."""
+        return len(text) // self.CHARS_PER_TOKEN
+
+    def _get_context_window(self) -> int:
+        """Get the context window size for the current model."""
+        return self.settings.defaults.context_window
+
+    def _get_history_tokens(self) -> int:
+        """Estimate total tokens in conversation history."""
+        total = 0
+        if self.conversation_summary:
+            total += self._estimate_tokens(self.conversation_summary)
+        for msg in self.conversation_history:
+            total += self._estimate_tokens(msg.content)
+        return total
+
+    def _needs_compaction(self) -> bool:
+        """Check if conversation history needs compaction."""
+        context_window = self._get_context_window()
+        threshold = int(context_window * self.CONTEXT_THRESHOLD_PERCENT / 100)
+        current_tokens = self._get_history_tokens()
+        return current_tokens > threshold
+
+    async def _compact_history(self) -> None:
+        """Compact conversation history by summarizing older messages.
+
+        Keeps recent messages and creates a summary of older ones.
+        This preserves context while staying within token limits.
+        """
+        if len(self.conversation_history) < 4:
+            return  # Not enough to compact
+
+        # Keep the last few messages
+        keep_count = min(4, len(self.conversation_history) // 2)
+        to_summarize = self.conversation_history[:-keep_count]
+        to_keep = self.conversation_history[-keep_count:]
+
+        # Build summary prompt
+        history_text = "\n".join([
+            f"{msg.role}: {msg.content[:500]}..."
+            if len(msg.content) > 500 else f"{msg.role}: {msg.content}"
+            for msg in to_summarize
+        ])
+
+        summary_prompt = f"""Summarize this conversation history concisely, preserving key facts, decisions, and context:
+
+{history_text}
+
+Provide a brief summary (2-4 sentences) of what was discussed and any important outcomes."""
+
+        try:
+            messages = [Message(role="user", content=summary_prompt)]
+            response_text, _ = await self._call_llm(messages, use_tools=False, timeout=30.0)
+
+            if response_text:
+                # Combine with existing summary if any
+                if self.conversation_summary:
+                    self.conversation_summary = f"{self.conversation_summary}\n\nMore recently: {response_text}"
+                else:
+                    self.conversation_summary = response_text
+
+                # Keep only recent messages
+                self.conversation_history = to_keep
+                console.print("[dim](conversation compacted)[/dim]")
+
+        except Exception as e:
+            # If summarization fails, just truncate
+            debug(f"Compaction failed: {e}")
+            self.conversation_history = self.conversation_history[-6:]
+
+    # ==================== Memory Integration ====================
+
+    async def _search_memories(self, query: str) -> List[str]:
+        """Search long-term memory for relevant context.
+
+        Args:
+            query: The user's message to find relevant memories for
+
+        Returns:
+            List of relevant memory strings
+        """
+        if not self.memory_manager or not self.memory_manager.is_enabled():
+            return []
+
+        try:
+            results = await self.memory_manager.search_memories(
+                query=query,
+                user_id=self.session_id,
+                limit=self.MAX_MEMORY_RESULTS,
+            )
+            return [r.get("memory", r.get("content", "")) for r in results if r]
+        except Exception as e:
+            debug(f"Memory search failed: {e}")
+            return []
+
+    async def _store_memory(self, content: str, metadata: Dict = None) -> None:
+        """Store important information in long-term memory.
+
+        Args:
+            content: The content to remember
+            metadata: Optional metadata
+        """
+        if not self.memory_manager or not self.memory_manager.is_enabled():
+            return
+
+        try:
+            await self.memory_manager.add_memory(
+                content=content,
+                user_id=self.session_id,
+                metadata=metadata or {},
+            )
+        except Exception as e:
+            debug(f"Memory store failed: {e}")
+
+    async def _extract_and_store_memories(self, user_msg: str, assistant_msg: str) -> None:
+        """Extract key facts from an exchange and store in memory.
+
+        This runs after each successful exchange to build long-term memory.
+        """
+        if not self.memory_manager or not self.memory_manager.is_enabled():
+            return
+
+        # Only store if there's meaningful content
+        if len(assistant_msg) < 50:
+            return
+
+        # Build extraction prompt
+        extract_prompt = f"""Extract any important facts, decisions, or preferences from this exchange that should be remembered for future conversations.
+
+User: {user_msg[:500]}
+Assistant: {assistant_msg[:500]}
+
+If there are important facts (e.g., user preferences, project decisions, file locations mentioned), list them briefly. If nothing important, respond with "None"."""
+
+        try:
+            messages = [Message(role="user", content=extract_prompt)]
+            response_text, _ = await self._call_llm(messages, use_tools=False, timeout=20.0)
+
+            if response_text and "none" not in response_text.lower()[:20]:
+                await self._store_memory(
+                    content=response_text,
+                    metadata={"type": "extracted", "session": self.session_id},
+                )
+        except Exception:
+            pass  # Memory extraction is best-effort
+
+    def _build_context_with_memories(
+        self, memories: List[str], summary: str = ""
+    ) -> str:
+        """Build context string from memories and summary.
+
+        Args:
+            memories: List of relevant memories
+            summary: Conversation summary if any
+
+        Returns:
+            Context string to prepend to system prompt
+        """
+        parts = []
+
+        if summary:
+            parts.append(f"Previous conversation summary:\n{summary}")
+
+        if memories:
+            memory_text = "\n".join(f"- {m}" for m in memories[:5])
+            parts.append(f"Relevant memories:\n{memory_text}")
+
+        if parts:
+            return "\n\n".join(parts) + "\n\n"
+        return ""

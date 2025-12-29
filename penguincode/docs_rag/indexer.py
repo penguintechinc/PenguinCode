@@ -206,6 +206,7 @@ class DocumentationIndexer:
         collection = self._get_collection()
         total_chunks = 0
 
+        embedding_error_shown = False
         for i, content in enumerate(doc_contents):
             metadata = {
                 "library": library.name,
@@ -228,7 +229,13 @@ class DocumentationIndexer:
                     )
                     total_chunks += 1
 
-                except Exception:
+                except Exception as e:
+                    # Log first embedding error only to avoid spam
+                    if not embedding_error_shown:
+                        embedding_error_shown = True
+                        import sys
+                        print(f"  Embedding error: {e}", file=sys.stderr)
+                        print(f"  Hint: Run 'ollama pull {self.embedding_model}'", file=sys.stderr)
                     continue
 
         # Update metadata
@@ -266,6 +273,7 @@ class DocumentationIndexer:
         collection = self._get_collection()
         total_chunks = 0
 
+        embedding_error_shown = False
         for i, content in enumerate(doc_contents):
             metadata = {
                 "library": f"_lang_{language.value}",
@@ -287,7 +295,13 @@ class DocumentationIndexer:
                     )
                     total_chunks += 1
 
-                except Exception:
+                except Exception as e:
+                    # Log first embedding error only to avoid spam
+                    if not embedding_error_shown:
+                        embedding_error_shown = True
+                        import sys
+                        print(f"  Embedding error: {e}", file=sys.stderr)
+                        print(f"  Hint: Run 'ollama pull {self.embedding_model}'", file=sys.stderr)
                     continue
 
         if "languages" not in self.index_metadata:

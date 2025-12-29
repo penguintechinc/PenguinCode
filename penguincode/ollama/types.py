@@ -5,12 +5,20 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class ToolCall:
+    """Tool call from assistant message."""
+
+    function: Dict[str, Any]
+
+
+@dataclass
 class Message:
     """Chat message."""
 
     role: str  # "system", "user", "assistant"
     content: str
     images: Optional[List[str]] = None  # For vision models
+    tool_calls: Optional[List[ToolCall]] = None  # Tool calls from assistant
 
 
 @dataclass

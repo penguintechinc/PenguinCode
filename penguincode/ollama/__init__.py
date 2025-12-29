@@ -1,7 +1,7 @@
 """Ollama client and types."""
 
 from .client import OllamaClient
-from .types import GenerateRequest, GenerateResponse, Message, ChatRequest, ChatResponse
+from .types import GenerateRequest, GenerateResponse, Message, ChatRequest, ChatResponse, ToolCall
 
 __all__ = [
     "OllamaClient",
@@ -10,4 +10,5 @@ __all__ = [
     "Message",
     "ChatRequest",
     "ChatResponse",
+    "ToolCall",
 ]

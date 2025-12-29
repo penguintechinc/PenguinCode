@@ -14,10 +14,10 @@ models:
   research: "llama3.2:3b"
   # Execution models (code generation, file writes)
   execution: "qwen2.5-coder:7b"       # Complex: refactoring, multi-file, features
-  execution_lite: "qwen2.5-coder:1.5b" # Simple: single file edits, quick fixes
+  execution_lite: "qwen2.5-coder:7b"  # Simple: single file edits (use 1.5b if installed)
   # Exploration models (code reading, search)
   exploration: "llama3.2:3b"           # Standard exploration
-  exploration_lite: "llama3.2:1b"      # Quick file reads, simple searches
+  exploration_lite: "llama3.2:3b"      # Quick file reads (use 1b if installed)
 
 # Per-agent model overrides (optimized for RTX 4060 Ti 8GB)
 agents:
@@ -162,3 +162,47 @@ usage_api:
   jwt_token: "${OLLAMA_USAGE_JWT}"
   refresh_interval: 300
   show_warnings_at: 80
+
+# MCP (Model Context Protocol) Server Configuration
+# Extend PenguinCode with additional tools via MCP servers
+# See: https://modelcontextprotocol.io/
+mcp:
+  enabled: true
+  servers:
+    # Example: DuckDuckGo search via MCP (stdio-based)
+    # - name: "duckduckgo"
+    #   transport: "stdio"
+    #   command: "npx"
+    #   args: ["-y", "@nickclyde/duckduckgo-mcp-server"]
+    #   timeout: 30
+
+    # Example: SearXNG search via MCP (stdio-based)
+    # - name: "searxng"
+    #   transport: "stdio"
+    #   command: "uvx"
+    #   args: ["mcp-searxng"]
+    #   env:
+    #     SEARXNG_URL: "https://searx.be"
+    #   timeout: 30
+
+    # Example: Custom HTTP-based MCP server with auth
+    # - name: "custom-server"
+    #   transport: "http"
+    #   url: "http://localhost:8080"
+    #   headers:
+    #     Authorization: "Bearer ${MCP_API_TOKEN}"
+    #   timeout: 30
+
+    # Example: N8N workflow automation via MCP
+    # - name: "n8n"
+    #   transport: "http"
+    #   url: "http://localhost:5678/mcp"
+    #   headers:
+    #     X-N8N-API-KEY: "${N8N_API_KEY}"
+
+    # Example: Flowise AI workflow via MCP
+    # - name: "flowise"
+    #   transport: "http"
+    #   url: "http://localhost:3000/api/v1/mcp"
+    #   headers:
+    #     Authorization: "Bearer ${FLOWISE_API_KEY}"

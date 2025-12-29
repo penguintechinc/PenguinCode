@@ -1,8 +1,9 @@
 """Logging for PenguinCode.
 
 Uses Python's standard logging library.
-- INFO/WARNING/ERROR always go to /tmp/penguincode.log
+- INFO/WARNING/ERROR always go to /tmp/penguincode-{epoch}.log
 - DEBUG messages only appear when --debug flag is used
+- Each session creates a new log file with epoch timestamp
 
 Usage:
     from penguincode.core import debug as log
@@ -15,12 +16,14 @@ Usage:
 
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Log file location
-LOG_FILE = Path("/tmp/penguincode.log")
+# Generate log file with epoch timestamp (seconds since epoch)
+_epoch_timestamp = int(time.time())
+LOG_FILE = Path(f"/tmp/penguincode-{_epoch_timestamp}.log")
 
 # Get the logger instance
 _logger = logging.getLogger("penguincode")
@@ -85,6 +88,11 @@ _init_logging()
 def is_debug_enabled() -> bool:
     """Check if debug mode is enabled."""
     return _debug_enabled
+
+
+def get_log_file() -> Path:
+    """Get the current session's log file path."""
+    return LOG_FILE
 
 
 def debug(message: str, *args: Any, **kwargs: Any) -> None:

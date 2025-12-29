@@ -196,6 +196,48 @@ class UsageAPIConfig:
 
 
 @dataclass
+class MCPServerConfig:
+    """Configuration for a single MCP server.
+
+    MCP servers can be configured as:
+    1. stdio-based: spawns a subprocess (command + args)
+    2. HTTP-based: connects to an HTTP endpoint (url)
+
+    For authentication:
+    - Use 'env' to pass API keys via environment variables
+    - Use 'headers' for HTTP-based servers with auth headers
+    """
+
+    name: str  # Unique identifier for the server
+    enabled: bool = True
+    # Transport type: "stdio" or "http"
+    transport: str = "stdio"
+    # For stdio transport
+    command: str = ""  # e.g., "npx", "uvx", "python"
+    args: list = field(default_factory=list)  # e.g., ["-y", "@nickclyde/duckduckgo-mcp-server"]
+    # For HTTP transport
+    url: str = ""  # e.g., "http://localhost:8080"
+    # Authentication and environment
+    env: dict = field(default_factory=dict)  # Environment variables: {"API_KEY": "${MY_API_KEY}"}
+    headers: dict = field(default_factory=dict)  # HTTP headers for auth: {"Authorization": "Bearer ${TOKEN}"}
+    # Timeouts
+    timeout: int = 30  # Request timeout in seconds
+    startup_timeout: int = 10  # Time to wait for stdio server to start
+
+
+@dataclass
+class MCPConfig:
+    """MCP (Model Context Protocol) server configuration.
+
+    Allows configuration of multiple MCP servers for extending
+    PenguinCode with additional tools and capabilities.
+    """
+
+    enabled: bool = True
+    servers: list = field(default_factory=list)  # List of MCPServerConfig dicts
+
+
+@dataclass
 class DocsRagConfig:
     """Documentation RAG configuration.
 
@@ -263,6 +305,7 @@ class Settings:
     regulators: RegulatorsConfig = field(default_factory=RegulatorsConfig)
     usage_api: UsageAPIConfig = field(default_factory=UsageAPIConfig)
     docs_rag: DocsRagConfig = field(default_factory=DocsRagConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "Settings":
@@ -288,6 +331,7 @@ class Settings:
             regulators=RegulatorsConfig(**data.get("regulators", {})),
             usage_api=UsageAPIConfig(**data.get("usage_api", {})),
             docs_rag=cls._parse_docs_rag_config(data.get("docs_rag", {})),
+            mcp=cls._parse_mcp_config(data.get("mcp", {})),
         )
 
     @staticmethod
@@ -363,6 +407,31 @@ class Settings:
             languages_manual=languages_manual,
             libraries_manual=data.get("libraries_manual", []),
             priority_libraries=data.get("priority_libraries", DocsRagConfig().priority_libraries),
+        )
+
+
+    @staticmethod
+    def _parse_mcp_config(data: Dict[str, Any]) -> MCPConfig:
+        """Parse MCP server configuration."""
+        servers = []
+        servers_data = data.get("servers") or []  # Handle None from YAML
+        for server_data in servers_data:
+            if isinstance(server_data, dict) and "name" in server_data:
+                servers.append(MCPServerConfig(
+                    name=server_data["name"],
+                    enabled=server_data.get("enabled", True),
+                    transport=server_data.get("transport", "stdio"),
+                    command=server_data.get("command", ""),
+                    args=server_data.get("args", []),
+                    url=server_data.get("url", ""),
+                    env=server_data.get("env", {}),
+                    headers=server_data.get("headers", {}),
+                    timeout=server_data.get("timeout", 30),
+                    startup_timeout=server_data.get("startup_timeout", 10),
+                ))
+        return MCPConfig(
+            enabled=data.get("enabled", True),
+            servers=servers,
         )
 
 

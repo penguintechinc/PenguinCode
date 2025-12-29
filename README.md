@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="penguincode/penguincode-logo.png" alt="Penguin Code Logo" width="400">
+</p>
+
 # Penguin Code
 
 ```

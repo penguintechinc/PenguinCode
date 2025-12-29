@@ -48,8 +48,20 @@ def chat(
         "-c",
         help="Path to config.yaml",
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        "-d",
+        help="Enable verbose debug logging to /tmp/penguincode.log",
+    ),
 ) -> None:
     """Start an interactive chat session."""
+    # Enable debug logging if requested
+    if debug:
+        from penguincode.core.debug import enable_debug, LOG_FILE
+        enable_debug()
+        console.print(f"[yellow]Debug mode enabled - logging to {LOG_FILE}[/yellow]\n")
+
     # Run the REPL in async context
     asyncio.run(start_repl(project_dir, config_path))
 

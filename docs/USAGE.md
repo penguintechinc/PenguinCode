@@ -12,6 +12,7 @@ Complete guide to installing, configuring, and using Penguin Code.
 - [Memory Layer](#memory-layer)
 - [Agents](#agents)
 - [Examples](#examples)
+- [Logging](#logging)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -245,6 +246,15 @@ penguincode chat
 # 2. Inject relevant documentation context
 # 3. Review agent output
 # 4. Provide summarized response
+```
+
+### Debug Mode
+
+```bash
+# Enable verbose debug logging
+penguincode chat --debug
+
+# Debug output goes to /tmp/penguincode.log
 ```
 
 ### Documentation Commands
@@ -591,6 +601,59 @@ research:
 # Or
 research:
   engine: "searxng"  # Privacy-focused general search
+```
+
+---
+
+## Logging
+
+PenguinCode uses Python's standard logging library. All logs go to `/tmp/penguincode.log`.
+
+### Log Levels
+
+| Level | Description | When Logged |
+|-------|-------------|-------------|
+| **ERROR** | Errors and exceptions | Always |
+| **WARNING** | Unexpected behavior, timeouts | Always |
+| **INFO** | Agent spawns, LLM requests/responses | Always |
+| **DEBUG** | Full message content, tool args, output details | Only with `--debug` |
+
+### Viewing Logs
+
+```bash
+# Watch logs in real-time
+tail -f /tmp/penguincode.log
+
+# Filter by level
+grep "\[ERROR\]" /tmp/penguincode.log
+grep "\[WARNING\]" /tmp/penguincode.log
+
+# Clear logs
+> /tmp/penguincode.log
+```
+
+### Debug Mode
+
+Enable verbose debug logging with the `--debug` flag:
+
+```bash
+penguincode chat --debug
+```
+
+This adds detailed output including:
+- Full message content sent to LLM
+- Complete LLM response text
+- Tool call arguments and results
+- Agent task descriptions and outputs
+
+### Example Log Output
+
+```
+2025-12-28 10:15:32 [INFO] penguincode: LLM REQUEST to model=llama3.2:3b
+2025-12-28 10:15:35 [INFO] penguincode: LLM RESPONSE (523 chars)
+2025-12-28 10:15:35 [INFO] penguincode:   Tool calls (1):
+2025-12-28 10:15:35 [INFO] penguincode: AGENT SPAWN: executor (complexity=moderate)
+2025-12-28 10:15:42 [INFO] penguincode: AGENT RESULT: executor - SUCCESS
 ```
 
 ---

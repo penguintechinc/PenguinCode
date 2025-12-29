@@ -18,6 +18,10 @@ from typing import Dict, List, Optional, Tuple
 from penguincode.ollama import Message, OllamaClient
 from penguincode.config.settings import Settings
 from penguincode.ui import console
+from penguincode.core.debug import (
+    log_llm_request, log_llm_response, log_agent_spawn,
+    log_agent_result, log_intent_detection, log_error, warning
+)
 
 
 CHAT_SYSTEM_PROMPT = """You are PenguinCode, an AI coding assistant that routes tasks to specialized agents.
@@ -387,6 +391,9 @@ class ChatAgent:
         complexity = self._estimate_complexity(task)
         use_lite = force_lite or (complexity == "simple" and not force_full)
 
+        # Log the agent spawn
+        log_agent_spawn(agent_type, task, complexity)
+
         if agent_type == "explorer":
             tier = "lite" if use_lite else "standard"
             console.print(f"[cyan]> Spawning explorer agent ({tier})...[/cyan]")
@@ -402,6 +409,7 @@ class ChatAgent:
             console.print(f"[cyan]> Spawning researcher agent...[/cyan]")
             agent = self._get_researcher_agent()
         else:
+            warning(f"Unknown agent type requested: {agent_type}")
             return False, f"Unknown agent type: {agent_type}"
 
         try:
@@ -413,12 +421,19 @@ class ChatAgent:
                     agent.run(task),
                     timeout=self.agent_timeout
                 )
-                return result.success, result.output if result.success else (result.error or "Unknown error")
+                success = result.success
+                output = result.output if result.success else (result.error or "Unknown error")
+
+                # Log the result
+                log_agent_result(agent_type, success, output)
+                return success, output
             finally:
                 self.agent_semaphore.release()
         except asyncio.TimeoutError:
+            warning(f"Agent {agent_type} timed out after {self.agent_timeout}s")
             return False, f"Agent timed out after {self.agent_timeout} seconds"
         except Exception as e:
+            log_error(f"_spawn_agent({agent_type})", e)
             return False, f"Agent failed: {str(e)}"
 
     async def _spawn_agents_parallel(
@@ -575,6 +590,9 @@ class ChatAgent:
         response_text = ""
         tool_calls = []
 
+        # Debug logging
+        log_llm_request(self.model, messages, AGENT_TOOLS if use_tools else None)
+
         try:
             async with asyncio.timeout(timeout):
                 async for chunk in self.client.chat(
@@ -591,11 +609,16 @@ class ChatAgent:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             tool_calls.extend(msg.tool_calls)
         except asyncio.TimeoutError:
+            warning("LLM response timed out after %s seconds", timeout)
             console.print("[yellow]LLM response timed out[/yellow]")
             return "", []
         except Exception as e:
+            log_error("_call_llm", e)
             console.print(f"[red]LLM error: {e}[/red]")
             return "", []
+
+        # Debug log the response
+        log_llm_response(response_text, tool_calls)
 
         # Try parsing tool calls from text if none structured
         if not tool_calls:
@@ -809,6 +832,7 @@ class ChatAgent:
             if not tool_calls:
                 user_intent = self._detect_user_intent(user_message)
                 if user_intent:
+                    log_intent_detection(user_message, user_intent)
                     console.print(f"[dim](detected intent: {user_intent})[/dim]")
                     tool_calls = [{"name": user_intent, "arguments": {"task": user_message}}]
 

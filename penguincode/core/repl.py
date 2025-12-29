@@ -4,17 +4,20 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from rich.prompt import Prompt
 from rich.table import Table
 
-from penguincode.agents import ChatAgent, ExecutorAgent, ExplorerAgent
 from penguincode.config.settings import Settings, load_settings
 from penguincode.ollama import OllamaClient
 from penguincode.ui import console, print_error, print_info, print_success
 
 from .session import Session, SessionManager
+
+# Lazy imports to avoid circular dependency
+if TYPE_CHECKING:
+    from penguincode.agents import ChatAgent, ExecutorAgent, ExplorerAgent
 
 
 class REPLSession:
@@ -58,6 +61,9 @@ class REPLSession:
 
     async def __aenter__(self):
         """Async context manager entry."""
+        # Lazy import agents to avoid circular import
+        from penguincode.agents import ChatAgent, ExecutorAgent, ExplorerAgent
+
         # Initialize Ollama client
         self.ollama_client = OllamaClient(
             base_url=self.settings.ollama.api_url,

@@ -7,11 +7,17 @@ ollama:
   timeout: 120
 
 # Global model roles (fallback defaults - optimized for 8GB VRAM)
+# Uses tiered approach: lite models for simple tasks, full models for complex
 models:
   planning: "deepseek-coder:6.7b"
   orchestration: "llama3.2:3b"
   research: "llama3.2:3b"
-  execution: "qwen2.5-coder:7b"
+  # Execution models (code generation, file writes)
+  execution: "qwen2.5-coder:7b"       # Complex: refactoring, multi-file, features
+  execution_lite: "qwen2.5-coder:1.5b" # Simple: single file edits, quick fixes
+  # Exploration models (code reading, search)
+  exploration: "llama3.2:3b"           # Standard exploration
+  exploration_lite: "llama3.2:1b"      # Quick file reads, simple searches
 
 # Per-agent model overrides (optimized for RTX 4060 Ti 8GB)
 agents:

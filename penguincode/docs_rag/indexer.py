@@ -105,15 +105,14 @@ class DocumentationIndexer:
         if self._collection is not None:
             return self._collection
 
-        try:
-            import chromadb
-            from chromadb.config import Settings
+        import chromadb
 
-            self._chroma_client = chromadb.Client(Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=str(self.persist_dir),
-                anonymized_telemetry=False,
-            ))
+        try:
+            # Use new ChromaDB API (0.4.0+)
+            self._chroma_client = chromadb.PersistentClient(
+                path=str(self.persist_dir),
+                settings=chromadb.Settings(anonymized_telemetry=False),
+            )
 
             self._collection = self._chroma_client.get_or_create_collection(
                 name=self.collection_name,
@@ -121,23 +120,8 @@ class DocumentationIndexer:
             )
             return self._collection
 
-        except ImportError:
-            # Fallback: try newer chromadb API
-            try:
-                import chromadb
-
-                self._chroma_client = chromadb.PersistentClient(
-                    path=str(self.persist_dir)
-                )
-
-                self._collection = self._chroma_client.get_or_create_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": "cosine"}
-                )
-                return self._collection
-
-            except Exception as e:
-                raise RuntimeError(f"Failed to initialize ChromaDB: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize ChromaDB: {e}")
 
     async def _get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using Ollama."""
